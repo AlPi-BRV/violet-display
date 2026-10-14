@@ -1,10 +1,11 @@
 name: Firmware bauen
 
-# Baut die Firmware bei jedem Versions-Tag (z. B. v0.1.0),
-# haengt sie an das Release und aktualisiert die Web-Flash-Seite.
+# Baut die Firmware, sobald auf GitHub ein Release veroeffentlicht wird
+# (Tag z. B. v0.1.0), haengt sie an das Release und aktualisiert die
+# Web-Flash-Seite. Von Hand startbar unter "Actions".
 on:
-  push:
-    tags: ['v*']
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
