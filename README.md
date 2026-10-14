@@ -40,8 +40,11 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 | Chip | ESP32-S3-WROOM-1-N4R8 (4 MB Flash, 8 MB PSRAM) |
 | Auflösung | 800 × 480, kapazitiver Touch |
 
-**Bezugsquelle:** [Elecrow – CrowPanel 5.0"](https://www.elecrow.com/wiki/esp32-display-502727-intelligent-touch-screen-wi-fi26ble-800480-hmi-display.html)
-(Amazon-Link folgt). Beim Kauf auf **Board-Revision V3.0** achten – sie steht auf der
+**Bezugsquelle:** [CrowPanel 5.0" bei Amazon](https://www.amazon.de/dp/B0DL5WB7RQ) ·
+[Elecrow-Wiki zum 5.0"](https://www.elecrow.com/wiki/esp32-display-502727-intelligent-touch-screen-wi-fi26ble-800480-hmi-display.html)
+
+**Geplant:** Unterstützung für das [CrowPanel 7.0"](https://www.amazon.de/dp/B0CHDYR54Q) (DIS08070H) –
+noch nicht lauffähig, bitte vorerst das 5"-Modell verwenden. Beim Kauf auf **Board-Revision V3.0** achten – sie steht auf der
 Rückseite der Platine neben dem Flachbandkabel.
 
 Getestet ist nur diese Variante. Andere CrowPanel-Größen oder ältere Revisionen
