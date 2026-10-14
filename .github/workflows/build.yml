@@ -1,0 +1,86 @@
+name: Firmware bauen
+
+# Baut die Firmware bei jedem Versions-Tag (z. B. v0.1.0),
+# haengt sie an das Release und aktualisiert die Web-Flash-Seite.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .pio/libdeps
+          key: pio-${{ hashFiles('platformio.ini') }}
+
+      - name: PlatformIO installieren
+        run: pip install platformio esptool
+
+      - name: Firmware bauen
+        run: pio run
+
+      - name: Version pruefen
+        run: |
+          VERSION=$(grep -oP '#define FW_VERSION\s+"\K[^"]+' src/main.cpp)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "Tag $GITHUB_REF_NAME passt nicht zu FW_VERSION $VERSION in src/main.cpp"
+            exit 1
+          fi
+
+      - name: Dateien zusammenstellen
+        run: |
+          B=.pio/build/crowpanel5
+          BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -n 1)
+          mkdir -p site/firmware
+          python -m esptool --chip esp32s3 merge_bin \
+            -o site/firmware/violet-display-full.bin \
+            --flash_mode keep --flash_freq keep --flash_size keep \
+            0x0 $B/bootloader.bin \
+            0x8000 $B/partitions.bin \
+            0xe000 "$BOOT_APP0" \
+            0x10000 $B/firmware.bin
+          cp $B/firmware.bin site/firmware/violet-display-app.bin
+          cp docs/index.html site/
+          sed "s/__VERSION__/$VERSION/" docs/manifest.json > site/manifest.json
+          cp site/firmware/violet-display-full.bin "violet-display-$VERSION-full.bin"
+          cp site/firmware/violet-display-app.bin  "violet-display-$VERSION-app.bin"
+
+      - name: Release anlegen
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Violet Pool-Display ${{ env.VERSION }}
+          files: |
+            violet-display-${{ env.VERSION }}-full.bin
+            violet-display-${{ env.VERSION }}-app.bin
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  pages:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

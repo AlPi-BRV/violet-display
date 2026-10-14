@@ -1,0 +1,6 @@
+# PlatformIO / VS Code
+.pio/
+.vscode/
+
+# eigene Zugangsdaten – nie ins Repository
+src/config_local.h

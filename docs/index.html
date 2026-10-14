@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Violet Pool-Display flashen</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root { --bg: #f4f6f8; --card: #fff; --text: #1d2730; --muted: #5b6875; --accent: #1b6fb5; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0e151c; --card: #17212b; --text: #e6edf3; --muted: #9aa8b5; --accent: #5aa7ea; }
+    }
+    body { margin: 0; background: var(--bg); color: var(--text);
+           font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { max-width: 720px; margin: 0 auto; padding: 32px 16px 48px; }
+    h1 { font-size: 26px; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 24px; }
+    .card { background: var(--card); border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; }
+    ol { padding-left: 20px; margin: 0; }
+    li { margin: 6px 0; }
+    .hint { color: var(--muted); font-size: 14px; }
+    esp-web-install-button { display: block; margin: 8px 0 4px; }
+    a { color: var(--accent); }
+    code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Violet Pool-Display</h1>
+  <p class="sub">Firmware für das Elecrow CrowPanel 5" (DIS07050H) – direkt im Browser flashen</p>
+
+  <div class="card">
+    <ol>
+      <li>Display per USB-C mit dem Rechner verbinden.</li>
+      <li>Diese Seite in <strong>Chrome</strong> oder <strong>Edge</strong> öffnen (Firefox und Safari können kein USB).</li>
+      <li>Auf <em>Installieren</em> klicken und den Anschluss des Displays wählen.</li>
+    </ol>
+    <esp-web-install-button manifest="manifest.json">
+      <span slot="unsupported">Dieser Browser kann nicht flashen – bitte Chrome oder Edge verwenden.</span>
+    </esp-web-install-button>
+    <p class="hint">Startet die Verbindung nicht: am Display <code>BOOT</code> gedrückt halten, kurz <code>RESET</code> drücken, <code>BOOT</code> loslassen.</p>
+  </div>
+
+  <div class="card">
+    <strong>Nach dem Flashen</strong>
+    <p>Das Display öffnet die Einstellungen von selbst. WLAN suchen und Passwort eingeben, dann im Reiter
+    „Violet“ die IP der Violet sowie Benutzer und Passwort eintragen. Später erreichst du die Einstellungen,
+    indem du die Kopfzeile 2 Sekunden gedrückt hältst.</p>
+    <p class="hint">Beim Aktualisieren fragt das Tool, ob das Gerät gelöscht werden soll. Mit „Nein“ bleiben die
+    Einstellungen erhalten.</p>
+  </div>
+
+  <p class="hint">Kein offizielles Produkt von PoolDigital. Nutzung auf eigene Gefahr.
+  Quellcode und Anleitung: <a href="https://github.com/AlPi-BRV/violet-display">github.com/AlPi-BRV/violet-display</a></p>
+</main>
+</body>
+</html>
