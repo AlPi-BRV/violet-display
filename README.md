@@ -10,6 +10,16 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 > im Repository ein Issue anlegen, nicht bei PoolDigital. Nutzung auf eigene Gefahr –
 > das Display kann die Filterpumpe und die Rückspülung schalten.
 
+## Bilder
+
+| Übersicht | Bedienung Filterpumpe |
+|---|---|
+| ![Übersicht](docs/images/uebersicht.jpg) | ![Filterpumpe](docs/images/pumpe.jpg) |
+
+| Einrichtung am Display |
+|---|
+| ![Einstellungen](docs/images/einstellungen.jpg) |
+
 ## Funktionen
 
 - **Übersicht mit vier großen Kacheln:** Wassertemperatur (mit Luft und Absorber),
@@ -29,6 +39,10 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 | Display | **Elecrow CrowPanel ESP32 5.0"**, SKU **DIS07050H**, Board-Revision **V3.0** |
 | Chip | ESP32-S3-WROOM-1-N4R8 (4 MB Flash, 8 MB PSRAM) |
 | Auflösung | 800 × 480, kapazitiver Touch |
+
+**Bezugsquelle:** [Elecrow – CrowPanel 5.0"](https://www.elecrow.com/wiki/esp32-display-502727-intelligent-touch-screen-wi-fi26ble-800480-hmi-display.html)
+(Amazon-Link folgt). Beim Kauf auf **Board-Revision V3.0** achten – sie steht auf der
+Rückseite der Platine neben dem Flachbandkabel.
 
 Getestet ist nur diese Variante. Andere CrowPanel-Größen oder ältere Revisionen
 haben eine andere Pin-Belegung.

@@ -568,7 +568,7 @@ static void drawPump() {
   fitFont(st, 800 - 2 * M);
   canvas.setTextColor(C_TEXT);
   canvas.setTextDatum(ML_DATUM);
-  canvas.drawString(st, M + 4, HEAD + 22);
+  canvas.drawString(st, M + 4, HEAD + 14);
 
   Mode md = modeOf(data.pump);
   label("Betriebsart", M + 4, R_ON.y - 4);
