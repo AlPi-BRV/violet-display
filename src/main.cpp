@@ -392,11 +392,12 @@ static bool sendCommand(const char* func, const char* action, int value) {
     toast("WLAN getrennt", C_ACC_ORG);
     return false;
   }
-  int dauer = strcmp(action, "AUTO") == 0 ? 0 : SWITCH_DURATION_MIN;
+  int dauer = strcmp(action, "AUTO") == 0 ? 0 : SWITCH_DURATION_MIN * 60;   // Sekunden
   char url[160];
   snprintf(url, sizeof(url), "http://%s/setFunctionManually?%s,%s,%d,%d",
            violetHost.c_str(), func, action, dauer, value);
-  Serial.printf("Befehl: %s\n", url);
+  Serial.printf("Befehl: %s  (Login: %s, Passwortlaenge %u)\n", url,
+                violetUser.length() ? violetUser.c_str() : "-", (unsigned)violetPass.length());
 
   HTTPClient http;
   http.setTimeout(5000);
@@ -615,10 +616,20 @@ static void drawDots(int xr, int y, int count, int sel, uint16_t col) {
   }
 }
 
+// Bereich ueber ein kleines Zwischenbild uebertragen (ein Clip auf dem Display
+// lieferte auf diesem Panel ein verschobenes Bild)
+static LGFX_Sprite part(&tft);
+
 static void pushRegion(const Rect& r) {
-  tft.setClipRect(r.x, r.y, r.w, r.h);
-  canvas.pushSprite(0, 0);
-  tft.clearClipRect();
+  part.setColorDepth(16);
+  part.setPsram(true);
+  if (!part.createSprite(r.w, r.h)) {
+    canvas.pushSprite(0, 0);
+    return;
+  }
+  canvas.pushSprite(&part, -r.x, -r.y);
+  part.pushSprite(r.x, r.y);
+  part.deleteSprite();
 }
 
 static void drawDialog() {
@@ -1041,11 +1052,11 @@ static const char* const KB_ROWS[3][5][11] = {
     { "A","S","D","F","G","H","J","K","L","-", nullptr },
     { "#SHIFT|1.5","Y","X","C","V","B","N","M","#BS|1.5", nullptr },
     { "#SYM|2",".","#SPACE|5","@","_", nullptr } },
-  { { "1","2","3","4","5","6","7","8","9","0", nullptr },
+  { { "ä","ö","ü","Ä","Ö","Ü","ß","€","§","°", nullptr },
     { "!","\"","#","$","%","&","/","(",")","=", nullptr },
     { "?","+","*","~","'",":",";","<",">","|", nullptr },
-    { "#ABC|1.5","[","]","{","}","\\","^",",","#BS|1.5", nullptr },
-    { "#ABC|2",".","#SPACE|5","@","_", nullptr } },
+    { "#ABC|1.5","[","]","{","}","\\","^","´","#BS|1.5", nullptr },
+    { "#ABC|2",",","#SPACE|5","@","_", nullptr } },
 };
 static const int KB_Y0 = FY0 + 3 * (FH + FG) + 8;
 static const int KB_RH = (480 - KB_Y0 - M) / 5;
@@ -1076,7 +1087,7 @@ static bool kbKey(int r, int i, Rect& out, String& t) {
 static String keyLabel(const String& t) {
   if (t == "#SHIFT") return kbLayer == KB_UPPER ? "ABC" : "abc";
   if (t == "#BS")    return "<-";
-  if (t == "#SYM")   return "!#1";
+  if (t == "#SYM")   return "äö!#";
   if (t == "#ABC")   return "abc";
   if (t == "#SPACE") return "Leerzeichen";
   return t;
@@ -1166,7 +1177,8 @@ static void drawField(const Rect& r, int i, bool active) {
   String shown = edVal[i];
   if (isPassField(i) && !edShowPass) {
     shown = "";
-    for (size_t k = 0; k < edVal[i].length(); k++) shown += "*";
+    for (size_t k = 0; k < edVal[i].length(); k++)
+      if (((uint8_t)edVal[i][k] & 0xC0) != 0x80) shown += "*";
   }
   if (active) shown += "_";
   useFont(fT);
@@ -1373,7 +1385,11 @@ static void keyInput(const String& t) {
   if (t == "#SHIFT")      kbLayer = (kbLayer == KB_UPPER) ? KB_LOWER : KB_UPPER;
   else if (t == "#SYM")   kbLayer = KB_SYM;
   else if (t == "#ABC")   kbLayer = KB_LOWER;
-  else if (t == "#BS" || t == "<-") { if (v.length()) v.remove(v.length() - 1); }
+  else if (t == "#BS" || t == "<-") {
+    // ganzes Zeichen loeschen (Umlaute bestehen aus mehreren Bytes)
+    while (v.length() && ((uint8_t)v[v.length() - 1] & 0xC0) == 0x80) v.remove(v.length() - 1);
+    if (v.length()) v.remove(v.length() - 1);
+  }
   else if (t == "#SPACE") { if (v.length() < 63) v += ' '; }
   else {
     if (v.length() < 63) v += t;
