@@ -33,7 +33,7 @@ jobs:
           key: pio-${{ hashFiles('platformio.ini') }}
 
       - name: PlatformIO installieren
-        run: pip install platformio esptool
+        run: pip install platformio "esptool==4.8.1"
 
       - name: Firmware bauen
         run: |
@@ -66,11 +66,13 @@ jobs:
             0x8000 $B/partitions.bin \
             0xe000 "$BOOT_APP0" \
             0x10000 $B/firmware.bin
-          cp $B/firmware.bin site/firmware/violet-display-app.bin
+          cp $B/firmware.bin site/firmware/violet-display-ota.bin
           cp docs/index.html site/
           sed "s/__VERSION__/$VERSION/" docs/manifest.json > site/manifest.json
           cp site/firmware/violet-display-full.bin "violet-display-$VERSION-full.bin"
-          cp site/firmware/violet-display-app.bin  "violet-display-$VERSION-app.bin"
+          # ab 0.3.0 heisst die Update-Datei "-ota.bin" (0.2.x sucht "-app.bin" und
+          # spielt die neue Grundlage so nicht versehentlich ueber WLAN ein)
+          cp site/firmware/violet-display-ota.bin  "violet-display-$VERSION-ota.bin"
 
       - name: Release anlegen
         if: github.ref_type == 'tag'
@@ -79,7 +81,7 @@ jobs:
           name: Violet Pool-Display ${{ env.VERSION }}
           files: |
             violet-display-${{ env.VERSION }}-full.bin
-            violet-display-${{ env.VERSION }}-app.bin
+            violet-display-${{ env.VERSION }}-ota.bin
 
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name != 'push'

@@ -19,10 +19,12 @@
 #include <esp_ota_ops.h>
 #include <esp_heap_caps.h>
 #include "config.h"
-#include "lgfx_crowpanel5.h"
+#define LGFX_USE_V1
+#include <LovyanGFX.hpp>
+#include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.2.1"
+#define FW_VERSION  "0.3.0"
 #define GITHUB_REPO "AlPi-BRV/violet-display"
 #define UPDATE_CHECK_EVERY_MS (24UL * 60UL * 60UL * 1000UL)
 #define UPDATE_FIRST_CHECK_MS (60UL * 1000UL)
@@ -55,8 +57,10 @@
 #define PAGE_TIMEOUT_MS (60UL * 1000UL)
 #endif
 
-static LGFX tft;
-static LGFX_Sprite canvas(&tft);
+// Unsichtbares Zwischenbild – hier wird gezeichnet, danach ins Panel kopiert
+static LGFX_Sprite canvas;
+
+static void pushAll() { disp::copyRect((const uint16_t*)canvas.getBuffer(), 0, 0, disp::W, disp::H); }
 
 // ---------------------------------------------------------------
 // Schriften (VLW aus fonts.h, nur benoetigte Zeichen)
@@ -218,28 +222,6 @@ static void askConfirm(Action a, const String& l1, const String& l2) {
   confirmL1 = l1;
   confirmL2 = l2;
   needRedraw = true;
-}
-
-// ---------------------------------------------------------------
-// PCA9557: Touch-Reset bei Board-Revision V3.0
-// ---------------------------------------------------------------
-static void pcaWrite(uint8_t reg, uint8_t val) {
-  Wire.beginTransmission(0x18);
-  Wire.write(reg);
-  Wire.write(val);
-  Wire.endTransmission();
-}
-
-static void touchResetV3() {
-  Wire.begin(19, 20);
-  pcaWrite(0x02, 0x00);
-  pcaWrite(0x03, 0x00);
-  pcaWrite(0x01, 0x00);
-  delay(20);
-  pcaWrite(0x01, 0x01);
-  delay(100);
-  pcaWrite(0x03, 0x02);
-  Wire.end();
 }
 
 // ---------------------------------------------------------------
@@ -508,7 +490,7 @@ static bool checkForUpdate() {
   String url;
   for (JsonObject a : doc["assets"].as<JsonArray>()) {
     String name = a["name"] | "";
-    if (name.endsWith("-app.bin")) url = a["browser_download_url"] | "";
+    if (name.endsWith("-ota.bin")) url = a["browser_download_url"] | "";
   }
   Serial.printf("Update-Pruefung: installiert %s, aktuell %s\n", FW_VERSION, tag.c_str());
   String neu = (tag.length() && versionNum(tag) > versionNum(FW_VERSION)) ? tag : "";
@@ -523,25 +505,25 @@ static bool checkForUpdate() {
 static int otaLastPct = -1;
 
 static void otaProgressScreen(int pct, const String& title) {
-  // direkt aufs Display (ohne Zwischenbild), damit waehrend des Downloads
-  // moeglichst wenig Speicher bewegt wird
   if (pct >= 0 && pct == otaLastPct) return;
-  tft.setFont(&fT.font);
-  tft.setTextSize(1);
-  tft.setTextDatum(MC_DATUM);
+  canvas.setFont(&fT.font);
+  canvas.setTextSize(1);
+  canvas.setTextDatum(MC_DATUM);
   if (pct < 0) {
-    tft.fillScreen(C_BG);
-    tft.setTextColor(C_TEXT);
-    tft.drawString(title, 400, 180);
-    tft.drawRoundRect(100, 230, 600, 40, 10, C_DIM);
+    canvas.fillScreen(C_BG);
+    canvas.setTextColor(C_TEXT);
+    canvas.drawString(title, 400, 180);
+    canvas.drawRoundRect(100, 230, 600, 40, 10, C_DIM);
+    pushAll();
     otaLastPct = 0;
     return;
   }
   otaLastPct = pct;
-  tft.fillRoundRect(104, 234, 592 * pct / 100, 32, 8, C_ACC_GRN);
-  tft.fillRect(330, 290, 140, 40, C_BG);
-  tft.setTextColor(C_TEXT);
-  tft.drawString(String(pct) + " %", 400, 310);
+  canvas.fillRoundRect(104, 234, 592 * pct / 100, 32, 8, C_ACC_GRN);
+  canvas.fillRect(330, 290, 140, 40, C_BG);
+  canvas.setTextColor(C_TEXT);
+  canvas.drawString(String(pct) + " %", 400, 310);
+  disp::copyRect((const uint16_t*)canvas.getBuffer(), 100, 230, 600, 100);
 }
 
 static void doOta() {
@@ -568,9 +550,10 @@ static void doOta() {
   t_httpUpdate_return r = httpUpdate.update(client, updateUrl);
   if (r == HTTP_UPDATE_OK) {
     otaProgressScreen(100, "");
-    tft.fillRect(0, 160, 800, 40, C_BG);
-    tft.setTextColor(C_TEXT);
-    tft.drawString("Update installiert – Neustart", 400, 180);
+    canvas.fillRect(0, 160, 800, 40, C_BG);
+    canvas.setTextColor(C_TEXT);
+    canvas.drawString("Update installiert – Neustart", 400, 180);
+    pushAll();
     delay(1500);
     ESP.restart();
   }
@@ -658,20 +641,8 @@ static void drawDots(int xr, int y, int count, int sel, uint16_t col) {
   }
 }
 
-// Bereich ueber ein kleines Zwischenbild uebertragen (ein Clip auf dem Display
-// lieferte auf diesem Panel ein verschobenes Bild)
-static LGFX_Sprite part(&tft);
-
 static void pushRegion(const Rect& r) {
-  part.setColorDepth(16);
-  part.setPsram(true);
-  if (!part.createSprite(r.w, r.h)) {
-    canvas.pushSprite(0, 0);
-    return;
-  }
-  canvas.pushSprite(&part, -r.x, -r.y);
-  part.pushSprite(r.x, r.y);
-  part.deleteSprite();
+  disp::copyRect((const uint16_t*)canvas.getBuffer(), r.x, r.y, r.w, r.h);
 }
 
 static void drawDialog() {
@@ -1171,7 +1142,7 @@ static void showMessage(const String& s) {
   canvas.fillScreen(C_BG);
   fitFont(s, 760, &fB, &fT);
   text(s, 400, 240, C_TEXT, MC_DATUM);
-  canvas.pushSprite(0, 0);
+  pushAll();
 }
 
 static void scanWifi() {
@@ -1569,7 +1540,7 @@ static void draw() {
     bool full = needFull;
     needFull = false;
     drawOverview(full);
-    if (full) canvas.pushSprite(0, 0);
+    if (full) pushAll();
   } else {
     canvas.fillScreen(C_BG);
     if (screen == SCR_OVERVIEW) drawOverview(true);
@@ -1577,7 +1548,7 @@ static void draw() {
     else if (screen == SCR_HEAT) drawHeat();
     else drawSettings();
     drawDialog();
-    canvas.pushSprite(0, 0);
+    pushAll();
     needFull = true;   // beim naechsten Mal Uebersicht komplett
   }
   needRedraw = false;
@@ -1659,7 +1630,7 @@ static void handleTouch() {
   static int32_t downY = 0;
   static bool longDone = false;
   int32_t tx, ty;
-  bool down = tft.getTouch(&tx, &ty);
+  bool down = disp::getTouch(&tx, &ty);
 
   // Kopfzeile der Uebersicht 2 s gedrueckt halten -> Einstellungen
   if (down && wasDown && !longDone && screen == SCR_OVERVIEW && confirmAct == A_NONE && !dimmed &&
@@ -1676,7 +1647,7 @@ static void handleTouch() {
     lastTouchMs = millis();
     if (dimmed) {
       dimmed = false;
-      tft.setBrightness(BRIGHT_ON);
+      disp::setBrightness(BRIGHT_ON);
     } else {
       onTap(tx, ty);
     }
@@ -1716,13 +1687,14 @@ void setup() {
   Serial.printf("Violet: %s  Benutzer: %s  Abfrage: %u ms\n", violetHost.c_str(), violetUser.c_str(),
                 (unsigned)pollMs);
 
-  touchResetV3();
-
-  tft.begin();
-  tft.setBrightness(BRIGHT_ON);
+  disp::backlightBegin();
+  disp::setBrightness(0);
+  if (!disp::begin()) Serial.println("Display konnte nicht gestartet werden");
+  disp::touchBegin();
   canvas.setPsram(true);
   canvas.setColorDepth(16);
-  if (!canvas.createSprite(800, 480)) Serial.println("Sprite konnte nicht angelegt werden (PSRAM?)");
+  if (!canvas.createSprite(disp::W, disp::H)) Serial.println("Zwischenbild konnte nicht angelegt werden (PSRAM?)");
+  disp::setBrightness(BRIGHT_ON);
 
   fS.begin(FONT_S, sizeof(FONT_S));
   fT.begin(FONT_T, sizeof(FONT_T));
@@ -1799,7 +1771,7 @@ void loop() {
 
   if (!dimmed && millis() - lastTouchMs > DIM_AFTER_MS) {
     dimmed = true;
-    tft.setBrightness(BRIGHT_DIM);
+    disp::setBrightness(BRIGHT_DIM);
   }
 
   if (needRedraw) draw();
