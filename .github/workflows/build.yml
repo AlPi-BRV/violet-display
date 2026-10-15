@@ -50,7 +50,8 @@ jobs:
         run: |
           VERSION=$(grep -oP '#define FW_VERSION\s+"\K[^"]+' src/main.cpp)
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+          # Tag darf "v0.3.1" oder "0.3.1" heissen
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "${GITHUB_REF_NAME#v}" != "$VERSION" ]]; then
             echo "Tag $GITHUB_REF_NAME passt nicht zu FW_VERSION $VERSION in src/main.cpp"
             exit 1
           fi
