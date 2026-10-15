@@ -177,9 +177,10 @@ static bool     dimmed = false;
 static bool     needRedraw = true;     // Bildschirm neu aufbauen
 static bool     needFull = true;       // Uebersicht: alles statt nur geaenderte Bereiche
 static int      sollStufe = 2;
+static int      pendingSpeed = 2;
 
 // Bestaetigungsdialog
-enum Action { A_NONE, A_PUMP_OFF, A_BW_START, A_BW_AUTO, A_SOLAR_ON, A_SOLAR_AUTO,
+enum Action { A_NONE, A_PUMP_OFF, A_PUMP_SPEED, A_BW_START, A_BW_AUTO, A_SOLAR_ON, A_SOLAR_AUTO,
               A_HEATER_ON, A_HEATER_AUTO, A_FACTORY, A_OTA };
 static Action   confirmAct = A_NONE;
 static String   confirmL1, confirmL2;
@@ -420,9 +421,36 @@ static bool sendCommand(const char* func, const char* action, int value) {
     toast("Fehler: HTTP " + String(code), C_ACC_ORG, 6000);
     return false;
   }
-  toast("Befehl gesendet", C_ACC_GRN);
+  String first = resp;
+  int nl = first.indexOf('\n');
+  if (nl >= 0) first = first.substring(0, nl);
+  first.trim();
   pollSoonAt = millis() + 1500;
+  if (!first.equalsIgnoreCase("OK")) {
+    String t = resp;
+    t.replace("\r", " ");
+    t.replace("\n", " ");
+    t.trim();
+    if (t.length() > 60) t = t.substring(0, 57) + "...";
+    toast("Violet: " + (t.length() ? t : String("keine Antwort")), C_ACC_ORG, 10000);
+    return false;
+  }
+  toast("Befehl gesendet", C_ACC_GRN);
   return true;
+}
+
+// Login pruefen ohne etwas zu schalten (Antwort wird nicht gelesen)
+static int testLogin(const String& host, const String& user, const String& pass) {
+  if (WiFi.status() != WL_CONNECTED || host.length() == 0) return -1;
+  HTTPClient http;
+  http.setTimeout(5000);
+  http.setConnectTimeout(3000);
+  if (!http.begin("http://" + host + "/getConfig?ALL")) return -1;
+  if (user.length()) http.setAuthorization(user.c_str(), pass.c_str());
+  int code = http.GET();
+  http.end();
+  Serial.printf("Login-Test: HTTP %d\n", code);
+  return code;
 }
 
 // ---------------------------------------------------------------
@@ -881,7 +909,8 @@ static void drawPump() {
   button(R_AUTO, "AUTO", md == M_AUTO);
 
   int st_ = (istAn(data.pump) && data.pumpStufe >= 1) ? data.pumpStufe : sollStufe;
-  label(md == M_ON ? "Drehzahl (wirkt sofort)" : "Drehzahl für EIN", M + 4, R_ECO.y - 4);
+  label(md == M_ON ? "Drehzahl (wirkt sofort)" : (istAn(data.pump) ? "Drehzahl (Pumpe läuft in AUTO)" : "Drehzahl für EIN"),
+        M + 4, R_ECO.y - 4);
   button(R_ECO,   "ECO",    st_ == 1);
   button(R_NORM,  "Normal", st_ == 2);
   button(R_BOOST, "Boost",  st_ == 3);
@@ -915,7 +944,15 @@ static void pumpTap(int x, int y) {
     int neu = hit(R_ECO, x, y) ? 1 : hit(R_NORM, x, y) ? 2 : hit(R_BOOST, x, y) ? 3 : 0;
     if (neu) {
       sollStufe = neu;
-      if (modeOf(data.pump) == M_ON) sendCommand("PUMP", "ON", neu);
+      if (modeOf(data.pump) == M_ON) {
+        sendCommand("PUMP", "ON", neu);                 // laeuft manuell: sofort umstellen
+      } else if (istAn(data.pump)) {
+        pendingSpeed = neu;                             // laeuft in AUTO: nachfragen
+        askConfirm(A_PUMP_SPEED, "Pumpe manuell mit " + stufeText(neu) + " laufen lassen?",
+                   "Zurück zur Automatik mit AUTO.");
+      } else {
+        toast(stufeText(neu) + " gilt beim nächsten EIN", C_TEXT, 3000);
+      }
     }
   }
   needRedraw = true;
@@ -1011,7 +1048,7 @@ static const Rect R_CANCEL = { 800 - M - 140 - 8 - 140, 5, 140, HEAD - 8 };
 static const Rect R_SAVE   = { 800 - M - 140, 5, 140, HEAD - 8 };
 
 static bool isPassField(int i) { return i == 2 || i == 4; }
-static bool hasSideBtn(int i) { return i == 2 || i == 3 || i == 4; }
+static bool hasSideBtn(int i) { return i == 1 || i == 2 || i == 3 || i == 4; }
 
 static Rect fieldRect(int i) {
   int row = i < 3 ? i : i - 3;
@@ -1201,7 +1238,20 @@ static void drawKeyboard() {
   }
 }
 
+static void drawSettingsBody();
+
 static void drawSettings() {
+  drawSettingsBody();
+  // Meldungen als Band ueber den Reitern (dort ist sonst kein Platz)
+  if (millis() < toastUntil) {
+    canvas.fillRect(0, 0, 800, HEAD, C_TILE);
+    canvas.drawFastHLine(0, HEAD - 1, 800, toastColor);
+    fitFont(toastText, 760, &fT, &fS);
+    text(toastText, 400, HEAD / 2, toastColor, MC_DATUM);
+  }
+}
+
+static void drawSettingsBody() {
   if (wifiList) {
     drawWifiList();
     return;
@@ -1219,6 +1269,7 @@ static void drawSettings() {
       drawField(r, i, i == edField);
       if (isPassField(i)) button(sideBtn(i), edShowPass ? "Verbergen" : "Zeigen", edShowPass);
       if (i == 3) button(sideBtn(i), "Suchen", false);
+      if (i == 1) button(sideBtn(i), "Login testen", false, C_BTN, C_TEXT, true);
     }
     if (edTab == 1) {
       String st = WiFi.status() == WL_CONNECTED
@@ -1427,8 +1478,19 @@ static void settingsTap(int x, int y) {
     int first = edTab == 0 ? 0 : 3, last = edTab == 0 ? 2 : 4;
     for (int i = first; i <= last; i++) {
       if (hasSideBtn(i) && hit(sideBtn(i), x, y)) {
-        if (i == 3) scanWifi();
-        else edShowPass = !edShowPass;
+        if (i == 3) {
+          scanWifi();
+        } else if (i == 1) {
+          String h = edVal[0];
+          h.trim();
+          showMessage("Prüfe Login ...");
+          int c = testLogin(h, edVal[1], edVal[2]);
+          if (c == 200) toast("Login OK", C_ACC_GRN, 5000);
+          else if (c == 401) toast("Login falsch (Benutzer/Passwort)", C_ACC_ORG, 8000);
+          else toast("Violet nicht erreichbar", C_ACC_ORG, 6000);
+        } else {
+          edShowPass = !edShowPass;
+        }
         return;
       }
       if (hit(fieldRect(i), x, y)) { edField = i; return; }
@@ -1513,6 +1575,7 @@ static void draw() {
 static void runAction(Action a) {
   switch (a) {
     case A_PUMP_OFF:    sendCommand("PUMP", "OFF", 0); break;
+    case A_PUMP_SPEED:  sendCommand("PUMP", "ON", pendingSpeed); break;
     case A_BW_START:    sendCommand("BACKWASH", "ON", 0); break;
     case A_BW_AUTO:     sendCommand("BACKWASH", "AUTO", 0); break;
     case A_SOLAR_ON:    sendCommand("SOLAR", "ON", 0); break;
