@@ -34,6 +34,8 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 - **Abfrageintervall** wählbar (15 s bis 5 min)
 - **Updates über WLAN:** prüft einmal am Tag auf eine neue Version, Installation per Tipp
 - **Werkseinstellungen** direkt am Display
+- **Ruhiges Bild:** Ausgabe ans Panel über einen Zwischenpuffer im internen RAM –
+  kein Zucken beim Datenabruf, beim Speichern oder während eines Updates
 - Dimmt nach 5 Minuten ohne Berührung; die erste Berührung weckt nur auf
 
 ## Hardware
@@ -68,6 +70,10 @@ haben eine andere Pin-Belegung.
 
 1. Repository klonen und den Ordner in VS Code mit der PlatformIO-Erweiterung öffnen.
 2. Unten in der Statusleiste auf *Upload* (Pfeil) klicken.
+
+Grundlage ist Arduino-ESP32 3.x über [pioarduino](https://github.com/pioarduino/platform-espressif32).
+Der **erste Build dauert lange** (rund 20–30 Minuten, mehrere GB Download), weil die
+Arduino-Bibliotheken mit eigenen Einstellungen neu gebaut werden – danach geht es schnell.
 
 Für eigene Startwerte beim Entwickeln eine Datei `src/config_local.h` anlegen –
 sie wird von Git ignoriert:
@@ -109,9 +115,10 @@ erscheint oben „Update … verfügbar“. Installiert wird über **Einstellung
 System → Update installieren** – das Display lädt die neue Firmware per WLAN,
 startet neu und behält alle Einstellungen.
 
-> Version 0.1.0 kann noch nicht über WLAN aktualisiert werden. Wer 0.1.0 hat,
-> spielt 0.2.0 einmal über den [Web-Installer](https://alpi-brv.github.io/violet-display/) ein
-> (beim Löschen-Hinweis „Nein“ wählen, dann bleiben die Einstellungen erhalten).
+> **Umstieg von 0.1.x / 0.2.x auf 0.3.0:** Ab 0.3.0 läuft das Display auf einer neuen
+> Grundlage (ESP-IDF 5). Dieser Wechsel geht einmalig nur per USB über den
+> [Web-Installer](https://alpi-brv.github.io/violet-display/) – beim Löschen-Hinweis
+> „Nein“ wählen, dann bleiben alle Einstellungen erhalten. Danach kommen Updates wieder über WLAN.
 
 ## Bedienung
 
