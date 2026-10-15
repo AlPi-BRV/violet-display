@@ -24,7 +24,7 @@
 #include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.3.0"
+#define FW_VERSION  "0.3.1"
 #define GITHUB_REPO "AlPi-BRV/violet-display"
 #define UPDATE_CHECK_EVERY_MS (24UL * 60UL * 60UL * 1000UL)
 #define UPDATE_FIRST_CHECK_MS (60UL * 1000UL)
