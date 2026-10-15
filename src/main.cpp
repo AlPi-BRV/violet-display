@@ -111,6 +111,7 @@ static const uint16_t C_BTN      = 0x2A0B;
 static const uint16_t C_BTN_SEL  = 0x2D0A;
 static const uint16_t C_BTN_RED  = 0x7104;
 static const uint16_t C_OFF      = 0x4208;   // ausgegraut
+static const uint16_t C_SEL_TXT  = 0x0861;   // fast schwarz: Schrift auf gruenen (gewaehlten) Tasten
 
 // ---------------------------------------------------------------
 // Einstellungen (Flash)
@@ -601,7 +602,7 @@ static void button(const Rect& r, const String& label, bool selected, uint16_t b
   if (selected) canvas.drawRoundRect(r.x, r.y, r.w, r.h, 12, C_ACC_GRN);
   if (small) fitFont(label, r.w - 12, &fT, &fS);
   else fitFont(label, r.w - 16, &fB, &fT, &fS);
-  text(label, r.x + r.w / 2, r.y + r.h / 2, selected ? C_ACC_GRN : txt, MC_DATUM);
+  text(label, r.x + r.w / 2, r.y + r.h / 2, selected ? C_SEL_TXT : txt, MC_DATUM);
 }
 
 static void drawGear(int cx, int cy, uint16_t col, uint16_t hole) {
