@@ -75,6 +75,14 @@ jobs:
           # spielt die neue Grundlage so nicht versehentlich ueber WLAN ein)
           cp site/firmware/violet-display-ota.bin  "violet-display-$VERSION-ota.bin"
 
+      - name: Testdateien bereitstellen (Entwicklungszweig)
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: violet-display-${{ env.VERSION }}-test
+          path: site/firmware/
+          retention-days: 14
+
       - name: Release anlegen
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
