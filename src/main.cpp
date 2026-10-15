@@ -570,10 +570,11 @@ static void text(const String& s, int x, int y, uint16_t col, textdatum_t datum)
 }
 
 static void button(const Rect& r, const String& label, bool selected, uint16_t base = C_BTN,
-                   uint16_t txt = C_TEXT) {
+                   uint16_t txt = C_TEXT, bool small = false) {
   canvas.fillSmoothRoundRect(r.x, r.y, r.w, r.h, 12, selected ? C_BTN_SEL : base);
   if (selected) canvas.drawRoundRect(r.x, r.y, r.w, r.h, 12, C_ACC_GRN);
-  fitFont(label, r.w - 16, &fB, &fT, &fS);
+  if (small) fitFont(label, r.w - 12, &fT, &fS);
+  else fitFont(label, r.w - 16, &fB, &fT, &fS);
   text(label, r.x + r.w / 2, r.y + r.h / 2, selected ? C_ACC_GRN : txt, MC_DATUM);
 }
 
@@ -833,7 +834,7 @@ static void pageHeader(const char* title) {
     fitFont(toastText, R_BACK.x - 240, &fT, &fS);
     text(toastText, R_BACK.x - 16, HEAD / 2, toastColor, MR_DATUM);
   }
-  button(R_BACK, "< Zurück", false);
+  button(R_BACK, "< Zurück", false, C_BTN, C_TEXT, true);
 }
 
 static void label(const String& s, int x, int y) {
@@ -994,9 +995,9 @@ static const int FH  = 42;
 static const int FG  = 6;
 static const int FX  = 230;
 static const int SIDE_BTN_W = 130;
-static Rect tabRect(int i) { return { M + i * 116, 5, 108, HEAD - 8 }; }
-static const Rect R_CANCEL = { 800 - M - 150 - 8 - 150, 5, 150, HEAD - 8 };
-static const Rect R_SAVE   = { 800 - M - 150, 5, 150, HEAD - 8 };
+static Rect tabRect(int i) { return { M + i * 122, 5, 116, HEAD - 8 }; }
+static const Rect R_CANCEL = { 800 - M - 140 - 8 - 140, 5, 140, HEAD - 8 };
+static const Rect R_SAVE   = { 800 - M - 140, 5, 140, HEAD - 8 };
 
 static bool isPassField(int i) { return i == 2 || i == 4; }
 static bool hasSideBtn(int i) { return i == 2 || i == 3 || i == 4; }
@@ -1140,7 +1141,7 @@ static Rect listRow(int i) { return { M, FY0 + 4 + i * 52, 800 - 2 * M, 46 }; }
 static void drawWifiList() {
   useFont(fT);
   text("WLAN wählen", M + 6, HEAD / 2, C_ACC_BLUE, ML_DATUM);
-  button(R_SAVE, "Abbrechen", false);
+  button(R_SAVE, "Abbrechen", false, C_BTN, C_TEXT, true);
   if (scanN == 0) {
     useFont(fB);
     text("Keine Netze gefunden", 400, 240, C_TEXT, MC_DATUM);
@@ -1193,9 +1194,9 @@ static void drawSettings() {
     drawWifiList();
     return;
   }
-  for (int i = 0; i < 4; i++) button(tabRect(i), TAB_NAME[i], edTab == i);
-  button(R_CANCEL, "Abbrechen", false);
-  button(R_SAVE, "Speichern", false, C_BTN, C_ACC_GRN);
+  for (int i = 0; i < 4; i++) button(tabRect(i), TAB_NAME[i], edTab == i, C_BTN, C_TEXT, true);
+  button(R_CANCEL, "Abbrechen", false, C_BTN, C_TEXT, true);
+  button(R_SAVE, "Speichern", false, C_BTN, C_ACC_GRN, true);
 
   if (edTab == 0 || edTab == 1) {
     int first = edTab == 0 ? 0 : 3, last = edTab == 0 ? 2 : 4;
@@ -1252,7 +1253,7 @@ static void drawSettings() {
     useFont(fT);
     text("Winterbetrieb", M + 6, R_WIN_OFF.y + 18, C_TEXT, ML_DATUM);
     useFont(fS);
-    text("sperrt Absorber + Heizung", M + 6, R_WIN_OFF.y + 46, C_DIM, ML_DATUM);
+    text("sperrt die Heizungen", M + 6, R_WIN_OFF.y + 46, C_DIM, ML_DATUM);
     button(R_WIN_OFF, "Aus", !edWinter);
     button(R_WIN_ON, "Ein", edWinter);
 
