@@ -24,7 +24,7 @@
 #include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.3.1"
+#define FW_VERSION  "0.3.2"
 #define GITHUB_REPO "AlPi-BRV/violet-display"
 #define UPDATE_CHECK_EVERY_MS (24UL * 60UL * 60UL * 1000UL)
 #define UPDATE_FIRST_CHECK_MS (60UL * 1000UL)
@@ -43,6 +43,12 @@
 #endif
 #ifndef SWITCH_DURATION_MIN
 #define SWITCH_DURATION_MIN 0      // Dauer bei manuell EIN/AUS in Minuten, 0 = bis AUTO
+#endif
+#ifndef BW_START_TIMEOUT_MS
+#define BW_START_TIMEOUT_MS (10UL * 60UL * 1000UL)   // Rueckspuelung: Absicherung, falls kein Schritt kommt
+#endif
+#ifndef BW_PUMP_AUTO_TIMEOUT_MS
+#define BW_PUMP_AUTO_TIMEOUT_MS (3UL * 60UL * 1000UL) // Warten auf Pumpe AUTO vor dem Start
 #endif
 #ifndef DIM_AFTER_MS
 #define DIM_AFTER_MS   (5UL * 60UL * 1000UL)
@@ -171,6 +177,8 @@ struct PoolData {
   String pumpLaufzeit;
   int   solar = -1, heater = -1;
   int   backwash = -1;
+  int   backwashStep = -1;       // BACKWASH_STEP: 0 = keine Rueckspuelung, 1..6 = Schritt
+  bool  backwashDelay = false;   // BACKWASH_DELAY_RUNNING = YES: Rueckspuelung wartet
   String uhrzeit;
 };
 
@@ -195,7 +203,7 @@ static int      sollStufe = 2;
 static int      pendingSpeed = 2;
 
 // Bestaetigungsdialog
-enum Action { A_NONE, A_PUMP_OFF, A_PUMP_SPEED, A_BW_START, A_BW_AUTO, A_SOLAR_ON, A_SOLAR_AUTO,
+enum Action { A_NONE, A_PUMP_OFF, A_PUMP_SPEED, A_BW_START, A_BW_PUMP_AUTO, A_SOLAR_ON, A_SOLAR_AUTO,
               A_HEATER_ON, A_HEATER_AUTO, A_FACTORY, A_OTA };
 static Action   confirmAct = A_NONE;
 static String   confirmL1, confirmL2;
@@ -333,7 +341,8 @@ static bool pollViolet() {
   }
   for (const char* f : { "pH_value", "orp_value", "pot_value", "PUMP",
                          "PUMP_RPM_0", "PUMP_RPM_1", "PUMP_RPM_2", "PUMP_RPM_3",
-                         "PUMP_RUNTIME", "SOLAR", "HEATER", "BACKWASH", "time" })
+                         "PUMP_RUNTIME", "SOLAR", "HEATER", "BACKWASH", "BACKWASH_STEP",
+                         "BACKWASH_DELAY_RUNNING", "time" })
     filter[f] = true;
 
   JsonDocument doc(&intAlloc);
@@ -367,6 +376,11 @@ static bool pollViolet() {
   n.solar    = ji(doc, "SOLAR");
   n.heater   = ji(doc, "HEATER");
   n.backwash = ji(doc, "BACKWASH");
+  n.backwashStep = ji(doc, "BACKWASH_STEP");
+  {
+    JsonVariant d = doc["BACKWASH_DELAY_RUNNING"];
+    n.backwashDelay = d.is<const char*>() ? strcasecmp(d.as<const char*>(), "YES") == 0 : (d.as<int>() == 1);
+  }
   String t = doc["time"] | "";
   n.uhrzeit = t.length() >= 5 ? t.substring(0, 5) : t;
   n.valid = true;
@@ -381,12 +395,13 @@ static bool pollViolet() {
 // ---------------------------------------------------------------
 // Violet: schalten  –  GET /setFunctionManually?FUNKTION,AKTION,DAUER,WERT
 // ---------------------------------------------------------------
-static bool sendCommand(const char* func, const char* action, int value) {
+static bool sendCommand(const char* func, const char* action, int value, int dauerSek = -1) {
   if (WiFi.status() != WL_CONNECTED) {
     toast("WLAN getrennt", C_ACC_ORG);
     return false;
   }
-  int dauer = strcmp(action, "AUTO") == 0 ? 0 : SWITCH_DURATION_MIN * 60;   // Sekunden
+  int dauer = dauerSek >= 0 ? dauerSek
+            : (strcmp(action, "AUTO") == 0 ? 0 : SWITCH_DURATION_MIN * 60);   // Sekunden
   char url[160];
   snprintf(url, sizeof(url), "http://%s/setFunctionManually?%s,%s,%d,%d",
            violetHost.c_str(), func, action, dauer, value);
@@ -444,6 +459,136 @@ static int testLogin(const String& host, const String& user, const String& pass)
   http.end();
   Serial.printf("Login-Test: HTTP %d\n", code);
   return code;
+}
+
+// ---------------------------------------------------------------
+// Manuelle Rueckspuelung – Regeln von PoolDigital:
+//  - Start nur bei BACKWASH_STEP == 0 und PUMP 0/1 (AUTO aus / AUTO an)
+//  - vorherigen Modus der Rueckspuelautomatik dauerhaft merken
+//  - falls nicht AUTO: BACKWASH,AUTO – dann BACKWASH,ON
+//  - Ende: STEP war > 0 und ist wieder 0 -> gemerkten Modus herstellen
+//    (OFF erst bei STEP 0 senden, sonst bricht die Rueckspuelung ab)
+//  - Absicherung: kommt nach ca. 10 min kein Schritt, ebenfalls zurueck
+//  - Schritte 1..6 haben keine festen Bedeutungen: nur "Schritt X/6"
+// ---------------------------------------------------------------
+enum BwPhase : uint8_t { BW_IDLE = 0, BW_WAIT_PUMP = 1, BW_STARTED = 2, BW_RUNNING = 3 };
+static BwPhase  bwPhase = BW_IDLE;
+static uint8_t  bwPrevMode = M_AUTO;   // Modus der Rueckspuelautomatik vor dem Start (AUTO oder AUS)
+static uint32_t bwSince = 0;
+
+static bool pumpeAuto(int p) { return p == 0 || p == 1; }
+
+static void bwSave() {
+  prefs.begin("pooldisp", false);
+  prefs.putUChar("bwphase", bwPhase == BW_WAIT_PUMP ? BW_IDLE : bwPhase);
+  prefs.putUChar("bwprev", bwPrevMode);
+  prefs.end();
+}
+
+// Nach einem Neustart eine laufende Ueberwachung fortsetzen
+static void bwLoad() {
+  prefs.begin("pooldisp", true);
+  uint8_t ph = prefs.getUChar("bwphase", BW_IDLE);
+  bwPrevMode = prefs.getUChar("bwprev", M_AUTO);
+  prefs.end();
+  bwPhase = (ph == BW_STARTED || ph == BW_RUNNING) ? (BwPhase)ph : BW_IDLE;
+  bwSince = millis();
+  if (bwPhase != BW_IDLE)
+    Serial.printf("Rueckspuelung: Ueberwachung fortgesetzt (Phase %u, vorher %s)\n", bwPhase,
+                  bwPrevMode == M_OFF ? "AUS" : "AUTO");
+}
+
+// Anzeige-Text fuer Kachel und Taste, leer = keine Rueckspuelung
+static String bwStatusText() {
+  if (data.backwashStep > 0) return "Rückspülung · Schritt " + String(data.backwashStep) + "/6";
+  if (data.backwashDelay) return "Rückspülung wartet";
+  if (bwPhase == BW_WAIT_PUMP) return "Rückspülung: Pumpe auf AUTO ...";
+  if (bwPhase == BW_STARTED || bwPhase == BW_RUNNING) return "Rückspülung wird gestartet ...";
+  if (data.backwashStep < 0 && istAn(data.backwash)) return "Rückspülung läuft";   // ohne STEP-Feld
+  return "";
+}
+
+// Gemerkten Modus wiederherstellen. Bei Fehler (z. B. WLAN) beim naechsten Abruf erneut.
+static bool bwRestore() {
+  if (bwPrevMode == M_OFF && !sendCommand("BACKWASH", "OFF", 0, 0)) return false;
+  bwPhase = BW_IDLE;
+  bwSave();
+  return true;
+}
+
+static void bwDoStart() {
+  Mode m = modeOf(data.backwash);
+  bwPrevMode = (m == M_OFF) ? M_OFF : M_AUTO;
+  bwPhase = BW_STARTED;
+  bwSince = millis();
+  bwSave();                                     // erst merken, dann umstellen
+  if (m != M_AUTO) {
+    if (!sendCommand("BACKWASH", "AUTO", 0)) {  // nichts geaendert -> nur aufhoeren
+      bwPhase = BW_IDLE;
+      bwSave();
+      return;
+    }
+    delay(500);
+  }
+  if (!sendCommand("BACKWASH", "ON", 0)) {
+    String t = toastText;
+    bwRestore();
+    toast(t, C_ACC_ORG, 8000);
+    return;
+  }
+  toast("Rückspülung gestartet", C_ACC_GRN, 6000);
+}
+
+// Nach Bestaetigung: Bedingungen pruefen und starten
+static void bwRequest() {
+  if (!data.valid) { toast("Keine Daten von der Violet", C_ACC_ORG); return; }
+  if (bwPhase != BW_IDLE || data.backwashStep > 0 || data.backwashDelay) {
+    toast("Rückspülung läuft bereits", C_ACC_ORG);
+    return;
+  }
+  if (data.backwashStep != 0) { toast("Violet meldet keinen Rückspülschritt", C_ACC_ORG, 8000); return; }
+  if (!pumpeAuto(data.pump)) {
+    askConfirm(A_BW_PUMP_AUTO, "Pumpe ist manuell geschaltet.", "Auf AUTO stellen und Rückspülung starten?");
+    return;
+  }
+  bwDoStart();
+}
+
+// Pumpe auf AUTO stellen, Start folgt nach dem naechsten Abruf mit PUMP 0/1
+static void bwPumpAutoThenStart() {
+  if (!sendCommand("PUMP", "AUTO", 0)) return;
+  bwPhase = BW_WAIT_PUMP;
+  bwSince = millis();
+  toast("Pumpe auf AUTO – Rückspülung startet gleich", C_ACC_GRN, 6000);
+}
+
+// Nach jedem erfolgreichen Abruf
+static void bwAfterPoll() {
+  int st = data.backwashStep;
+  switch (bwPhase) {
+    case BW_WAIT_PUMP:
+      if (pumpeAuto(data.pump) && st == 0) {
+        bwPhase = BW_IDLE;
+        bwDoStart();
+      } else if (millis() - bwSince > BW_PUMP_AUTO_TIMEOUT_MS) {
+        bwPhase = BW_IDLE;
+        toast("Pumpe nicht auf AUTO – Rückspülung nicht gestartet", C_ACC_ORG, 10000);
+      }
+      break;
+    case BW_STARTED:
+      if (st > 0) {
+        bwPhase = BW_RUNNING;
+        bwSave();
+      } else if (millis() - bwSince > BW_START_TIMEOUT_MS) {
+        if (bwRestore()) toast("Rückspülung nicht gestartet – Automatik zurückgestellt", C_ACC_ORG, 10000);
+      }
+      break;
+    case BW_RUNNING:
+      if (st == 0 && bwRestore()) toast("Rückspülung beendet", C_ACC_GRN, 8000);
+      break;
+    default: break;
+  }
+  if (bwPhase != BW_IDLE) needRedraw = true;
 }
 
 // ---------------------------------------------------------------
@@ -796,7 +941,7 @@ static void drawWaterTile() {
 // Filterpumpe
 static String pumpKey() {
   return String(data.pump) + "|" + String(data.pumpStufe) + "|" + laufzeitKurz(data.pumpLaufzeit) + "|" +
-         String(data.backwash);
+         String(data.backwash) + "|" + bwStatusText();
 }
 
 static void drawPumpTile() {
@@ -805,9 +950,11 @@ static void drawPumpTile() {
   drawChevron(r.x + r.w - 30, r.y + 26, C_DIM);
   String p = statusText(data.pump);
   if (istAn(data.pump) && stufeText(data.pumpStufe).length()) p += "  " + stufeText(data.pumpStufe);
-  if (istAn(data.backwash)) p = "Rückspülung";
-  fitFont(p, r.w - 32, &fM, &fB);
-  text(p, r.x + 16, r.y + r.h / 2 + 4, istAn(data.pump) ? C_ACC_GRN : C_TEXT, ML_DATUM);
+  uint16_t col = istAn(data.pump) ? C_ACC_GRN : C_TEXT;
+  String bw = bwStatusText();
+  if (bw.length()) { p = bw; col = C_ACC_BLUE; }
+  fitFont(p, r.w - 32, &fM, &fB, &fT);
+  text(p, r.x + 16, r.y + r.h / 2 + 4, col, ML_DATUM);
   smallLine(r, "Laufzeit heute " + laufzeitKurz(data.pumpLaufzeit), C_DIM);
 }
 
@@ -901,11 +1048,10 @@ static void drawPump() {
   button(R_NORM,  "Normal", st_ == 2);
   button(R_BOOST, "Boost",  st_ == 3);
 
-  // Manueller Start geht nur, wenn die Rueckspuelung in der Violet auf AUTO steht
-  if (istAn(data.backwash))
-    button(R_BW, "Rückspülung läuft ...", true, C_BTN_RED);
-  else if (modeOf(data.backwash) != M_AUTO)
-    button(R_BW, "Rückspülung " + statusText(data.backwash) + "  >  auf AUTO stellen", false);
+  // Waehrend einer Rueckspuelung ist die Start-Taste gesperrt
+  String bw = bwStatusText();
+  if (bw.length())
+    button(R_BW, bw, true, C_BTN_RED);
   else
     button(R_BW, "Rückspülung starten", false, C_BTN_RED);
 }
@@ -921,11 +1067,11 @@ static void pumpTap(int x, int y) {
   } else if (hit(R_AUTO, x, y)) {
     sendCommand("PUMP", "AUTO", 0);
   } else if (hit(R_BW, x, y)) {
-    if (istAn(data.backwash)) return;
-    if (modeOf(data.backwash) == M_AUTO)
-      askConfirm(A_BW_START, "Rückspülung jetzt", "manuell starten?");
+    if (bwStatusText().length()) return;          // laeuft / wartet / wird gestartet
+    if (!pumpeAuto(data.pump))
+      askConfirm(A_BW_PUMP_AUTO, "Pumpe ist manuell geschaltet.", "Auf AUTO stellen und Rückspülung starten?");
     else
-      askConfirm(A_BW_AUTO, "Rückspülung in der Violet", "auf AUTO stellen?");
+      askConfirm(A_BW_START, "Rückspülung jetzt", "manuell starten?");
   } else {
     int neu = hit(R_ECO, x, y) ? 1 : hit(R_NORM, x, y) ? 2 : hit(R_BOOST, x, y) ? 3 : 0;
     if (neu) {
@@ -1562,8 +1708,8 @@ static void runAction(Action a) {
   switch (a) {
     case A_PUMP_OFF:    sendCommand("PUMP", "OFF", 0); break;
     case A_PUMP_SPEED:  sendCommand("PUMP", "ON", pendingSpeed); break;
-    case A_BW_START:    sendCommand("BACKWASH", "ON", 0); break;
-    case A_BW_AUTO:     sendCommand("BACKWASH", "AUTO", 0); break;
+    case A_BW_START:     bwRequest(); break;
+    case A_BW_PUMP_AUTO: bwPumpAutoThenStart(); break;
     case A_SOLAR_ON:    sendCommand("SOLAR", "ON", 0); break;
     case A_SOLAR_AUTO:  sendCommand("SOLAR", "AUTO", 0); break;
     case A_HEATER_ON:   sendCommand("HEATER", "ON", 0); break;
@@ -1685,6 +1831,7 @@ void setup() {
   Serial.println("Violet Pool-Display " FW_VERSION " startet");
 
   loadSettings();
+  bwLoad();
   Serial.printf("Violet: %s  Benutzer: %s  Abfrage: %u ms\n", violetHost.c_str(), violetUser.c_str(),
                 (unsigned)pollMs);
 
@@ -1736,8 +1883,10 @@ void loop() {
   if (screen != SCR_SETTINGS && (soon || millis() - lastPoll >= pollMs)) {
     pollSoonAt = 0;
     lastPoll = millis();
-    if (pollViolet()) failCount = 0;
-    else failCount++;
+    if (pollViolet()) {
+      failCount = 0;
+      bwAfterPoll();
+    } else failCount++;
     needRedraw = true;
   }
 
