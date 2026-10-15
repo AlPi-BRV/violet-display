@@ -550,8 +550,12 @@ static void doOta() {
     return;
   }
   if (updateUrl.length() == 0) {
-    toast("Keine Update-Datei gefunden", C_ACC_ORG, 6000);
-    return;
+    // Release war beim letzten Nachsehen evtl. noch im Bau – noch einmal fragen
+    checkForUpdate();
+    if (updateUrl.length() == 0) {
+      toast("Update-Datei noch nicht bereit – später erneut versuchen", C_ACC_ORG, 8000);
+      return;
+    }
   }
   otaProgressScreen(-1, "Installiere Update " + updateVersion + " ...");
   WiFiClientSecure client;
