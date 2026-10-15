@@ -7,6 +7,8 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+  push:
+    branches: ['dev*']     # Entwicklungszweige: nur bauen, nichts veroeffentlichen
 
 permissions:
   contents: write
@@ -34,7 +36,14 @@ jobs:
         run: pip install platformio esptool
 
       - name: Firmware bauen
-        run: pio run
+        run: |
+          set -o pipefail
+          if ! pio run 2>&1 | tee build.log; then
+            # Compilerfehler als Hinweise am Lauf sichtbar machen
+            grep -E "error:|Error|undefined reference" build.log | head -40 | while read -r l; do echo "::error::$l"; done
+            exit 1
+          fi
+          grep -E "^(RAM|Flash):" build.log | while read -r l; do echo "::notice::$l"; done
 
       - name: Version pruefen
         run: |
@@ -73,11 +82,13 @@ jobs:
             violet-display-${{ env.VERSION }}-app.bin
 
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'push'
         with:
           path: site
 
   pages:
     needs: build
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
