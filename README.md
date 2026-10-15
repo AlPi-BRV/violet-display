@@ -12,24 +12,28 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 
 ## Bilder
 
-| Übersicht | Bedienung Filterpumpe |
+| Übersicht | Heizungen bedienen |
 |---|---|
-| ![Übersicht](docs/images/uebersicht.jpg) | ![Filterpumpe](docs/images/pumpe.jpg) |
+| ![Übersicht](docs/images/uebersicht.jpg) | ![Heizungen](docs/images/heizungen.jpg) |
 
-| Einrichtung am Display |
-|---|
-| ![Einstellungen](docs/images/einstellungen.jpg) |
+| Einrichtung am Display | System |
+|---|---|
+| ![Einstellungen](docs/images/einstellungen.jpg) | ![System](docs/images/system.jpg) |
 
 ## Funktionen
 
-- **Übersicht mit vier großen Kacheln:** Wassertemperatur (mit Luft und Absorber),
-  Wasserwerte (pH, Redox, Chlor – Kachel grün/gelb/rot), Filterpumpe, Heizungen
-- **Bedienung der Filterpumpe:** EIN / AUS / AUTO, Drehzahl ECO / Normal / Boost
-- **Rückspülung starten** – mit Sicherheitsabfrage; steht die Rückspülung in der
-  Violet nicht auf AUTO, bietet das Display an, sie auf AUTO zu stellen
-- **Einrichtung komplett am Display:** WLAN suchen und wählen, IP der Violet,
-  Benutzer und Passwort – mit Bildschirmtastatur
-- **Update-Hinweis:** prüft einmal am Tag, ob es hier eine neue Version gibt
+- **Übersicht mit vier großen Kacheln:** Wassertemperatur, Wasserwerte (Kachel
+  grün/gelb/rot), Filterpumpe, Heizungen
+- **Antippen schaltet durch:** Wasser- / Luft- / Absorbertemperatur und pH / Redox / Chlor
+- **Filterpumpe:** EIN / AUS / AUTO, Drehzahl ECO / Normal / Boost, Rückspülung starten
+- **Heizungen:** Absorber und Heizung EIN / AUS / AUTO – EIN und AUTO mit Sicherheitsabfrage
+- **Winterbetrieb:** sperrt die Bedienung der Heizungen, z. B. wenn die Anlage
+  entleert ist und Kugelhähne geschlossen sind
+- **Einrichtung komplett am Display:** WLAN suchen, feste IP oder DHCP, IP der Violet,
+  Benutzer und Passwort mit *Login testen* – Bildschirmtastatur mit Umlauten
+- **Abfrageintervall** wählbar (15 s bis 5 min)
+- **Updates über WLAN:** prüft einmal am Tag auf eine neue Version, Installation per Tipp
+- **Werkseinstellungen** direkt am Display
 - Dimmt nach 5 Minuten ohne Berührung; die erste Berührung weckt nur auf
 
 ## Hardware
@@ -43,9 +47,11 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 **Bezugsquelle:** [CrowPanel 5.0" bei Amazon](https://www.amazon.de/dp/B0DL5WB7RQ) ·
 [Elecrow-Wiki zum 5.0"](https://www.elecrow.com/wiki/esp32-display-502727-intelligent-touch-screen-wi-fi26ble-800480-hmi-display.html)
 
+Beim Kauf auf **Board-Revision V3.0** achten – sie steht auf der Rückseite der
+Platine neben dem Flachbandkabel.
+
 **Geplant:** Unterstützung für das [CrowPanel 7.0"](https://www.amazon.de/dp/B0CHDYR54Q) (DIS08070H) –
-noch nicht lauffähig, bitte vorerst das 5"-Modell verwenden. Beim Kauf auf **Board-Revision V3.0** achten – sie steht auf der
-Rückseite der Platine neben dem Flachbandkabel.
+noch nicht lauffähig, bitte vorerst das 5"-Modell verwenden.
 
 Getestet ist nur diese Variante. Andere CrowPanel-Größen oder ältere Revisionen
 haben eine andere Pin-Belegung.
@@ -82,17 +88,39 @@ Beim ersten Start öffnet das Display die Einstellungen von selbst:
 2. Reiter **Violet**: IP-Adresse der Violet, Benutzer und Passwort.
 3. **Speichern** – das Display verbindet sich und meldet, ob die Violet erreichbar ist.
 
-Später: **Kopfzeile 2 Sekunden gedrückt halten** öffnet die Einstellungen wieder.
+Später öffnet das **Zahnrad** neben „Pool“ die Einstellungen
+(oder die Kopfzeile 2 Sekunden gedrückt halten).
+
+| Reiter | Inhalt |
+|---|---|
+| Violet | IP der Violet, Benutzer, Passwort, *Login testen* |
+| WLAN | Netz suchen und wählen, WLAN-Passwort |
+| IP | Automatisch (DHCP) oder feste IP mit Subnetz, Gateway, DNS |
+| System | Abfrageintervall, Winterbetrieb, Update, Werkseinstellungen |
 
 Benutzer und Passwort sind nur für Schaltbefehle nötig; das Lesen der Werte
-funktioniert bei der Violet ohne Anmeldung.
+funktioniert bei der Violet ohne Anmeldung. Änderungen an WLAN oder IP starten
+das Display neu.
+
+## Updates
+
+Das Display fragt einmal am Tag hier nach der neuesten Version. Gibt es eine,
+erscheint oben „Update … verfügbar“. Installiert wird über **Einstellungen →
+System → Update installieren** – das Display lädt die neue Firmware per WLAN,
+startet neu und behält alle Einstellungen.
+
+> Version 0.1.0 kann noch nicht über WLAN aktualisiert werden. Wer 0.1.0 hat,
+> spielt 0.2.0 einmal über den [Web-Installer](https://alpi-brv.github.io/violet-display/) ein
+> (beim Löschen-Hinweis „Nein“ wählen, dann bleiben die Einstellungen erhalten).
 
 ## Bedienung
 
-- Kachel **Filterpumpe** antippen → Bedienseite
-- **AUS** und **Rückspülung** fragen vorher nach
+- Kacheln **Wassertemperatur** und **Wasserwerte** antippen → nächster Messwert
+- Kacheln **Filterpumpe** und **Heizungen** antippen → Bedienseite
+- Pumpe **AUS**, **Rückspülung**, Heizung **EIN** und **AUTO** fragen vorher nach
+- Drehzahl antippen, während die Pumpe in AUTO läuft → Rückfrage, dann manuell in dieser Stufe
 - Manuell EIN/AUS gilt, bis **AUTO** gedrückt wird
-- Die Bedienseite schließt sich nach 60 Sekunden ohne Berührung
+- Bedienseiten schließen sich nach 60 Sekunden ohne Berührung
 
 ## Sicherheit
 
@@ -120,10 +148,11 @@ on an Elecrow CrowPanel ESP32-S3 5" (DIS07050H, V3.0). Reads values directly fro
 Violet over Wi-Fi – no ioBroker or server required.
 
 - Overview: water temperature, water values (pH, ORP, chlorine), filter pump, heaters
-- Control: filter pump ON / OFF / AUTO with speed, manual backwash (with confirmation)
-- Setup entirely on the device: Wi-Fi scan, Violet IP, user and password
-  (long-press the header for 2 seconds)
-- Daily check for new releases
+- Control: filter pump ON / OFF / AUTO with speed, manual backwash, solar and heater
+  ON / OFF / AUTO (with confirmation), winter mode locks the heaters
+- Setup entirely on the device: Wi-Fi scan, static IP or DHCP, Violet IP, user and
+  password with login test, polling interval, factory reset (gear icon)
+- Over-the-air updates from GitHub releases
 - Flash in the browser: **[web installer](https://alpi-brv.github.io/violet-display/)**
 
 The user interface is German. Not an official PoolDigital product; use at your own risk.

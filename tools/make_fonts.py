@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 FONT_DIR = sys.argv[1] if len(sys.argv) > 1 else "/usr/share/fonts/opentype/inter"
 OUT = os.path.join(os.path.dirname(__file__), "..", "src", "fonts.h")
 
-TEXT = "".join(chr(c) for c in range(0x20, 0x7F)) + "ÄÖÜäöüß°·µ€§´"
+TEXT = "".join(chr(c) for c in range(0x20, 0x7F)) + "ÄÖÜäöüß°·µ€§´–…"
 NUM = " 0123456789,.-+°%CHVglmp/"
 
 # Name, Datei, Pixelgroesse, Zeichen

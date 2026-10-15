@@ -1063,7 +1063,7 @@ static Rect sideBtn(int i) {
 // Reiter IP: links Felder, rechts Ziffernblock
 static const Rect R_IP_AUTO = { M, HEAD + 10, 225, 56 };
 static const Rect R_IP_FIX  = { M + 235, HEAD + 10, 225, 56 };
-static Rect ipField(int i) { return { M + 140, HEAD + 86 + (i - 5) * 68, 330, 50 }; }
+static Rect ipField(int i) { return { M + 160, HEAD + 86 + (i - 5) * 68, 310, 50 }; }
 static const int PAD_X = 490, PAD_Y = HEAD + 10;
 static const int PAD_W = (800 - M - PAD_X - 2 * 8) / 3;
 static const int PAD_H = (480 - M - PAD_Y - 3 * 8) / 4;

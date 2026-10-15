@@ -38,5 +38,5 @@
 
 // Abfrageintervall in Millisekunden
 #ifndef POLL_INTERVAL_MS
-#define POLL_INTERVAL_MS 30000
+#define POLL_INTERVAL_MS 60000
 #endif
