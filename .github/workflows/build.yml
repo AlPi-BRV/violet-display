@@ -40,7 +40,9 @@ jobs:
           set -o pipefail
           if ! pio run 2>&1 | tee build.log; then
             # Compilerfehler als Hinweise am Lauf sichtbar machen
-            grep -E "error:|Error|undefined reference" build.log | head -40 | while read -r l; do echo "::error::$l"; done
+            grep -E "error:|Error|undefined reference" build.log | head -8 | while read -r l; do echo "::error::$l"; done
+            # Ende des Protokolls als ein Hinweis (Zeilenumbrueche als %0A)
+            echo "::warning title=Build-Ende::$(tail -n 60 build.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
             exit 1
           fi
           grep -E "^(RAM|Flash):" build.log | while read -r l; do echo "::notice::$l"; done
