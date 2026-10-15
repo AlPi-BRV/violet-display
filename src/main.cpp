@@ -22,7 +22,7 @@
 #include "lgfx_crowpanel5.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.2.0"
+#define FW_VERSION  "0.2.1"
 #define GITHUB_REPO "AlPi-BRV/violet-display"
 #define UPDATE_CHECK_EVERY_MS (24UL * 60UL * 60UL * 1000UL)
 #define UPDATE_FIRST_CHECK_MS (60UL * 1000UL)
@@ -121,6 +121,7 @@ static bool     ipFixed    = false;
 static String   ipAddr, ipMask = "255.255.255.0", ipGw, ipDns;
 static uint32_t pollMs     = POLL_INTERVAL_MS;
 static bool     winterMode = false;
+static String   fwUpdatedFrom;   // gesetzt, wenn seit dem letzten Start aktualisiert wurde
 
 static const uint32_t POLL_CHOICES[] = { 15000, 30000, 60000, 120000, 300000 };
 static const char* const POLL_LABEL[] = { "15 s", "30 s", "1 min", "2 min", "5 min" };
@@ -139,6 +140,15 @@ static void loadSettings() {
   ipDns      = prefs.getString("dns", "");
   pollMs     = prefs.getUInt("poll", pollMs);
   winterMode = prefs.getBool("winter", false);
+  prefs.end();
+
+  // Nach einem Update einmal Bescheid geben
+  prefs.begin("pooldisp", false);
+  String last = prefs.getString("fwver", "");
+  if (last != FW_VERSION) {
+    prefs.putString("fwver", FW_VERSION);
+    if (last.length()) fwUpdatedFrom = last;
+  }
   prefs.end();
   if (pollMs < 5000) pollMs = 5000;
 }
@@ -1736,6 +1746,8 @@ void setup() {
   }
   showMessage("Lese Violet ...");
   lastPoll = millis() - pollMs;
+  if (fwUpdatedFrom.length())
+    toast("Firmware aktualisiert: " + fwUpdatedFrom + " > " FW_VERSION, C_ACC_GRN, 15000);
 }
 
 void loop() {
