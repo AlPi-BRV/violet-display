@@ -1,9 +1,10 @@
 // Violet Pool-Display – Elecrow CrowPanel 5" (DIS07050H, V3.0)
 //
-// Liest getReadings direkt von der Violet-Poolsteuerung und zeigt vier Kacheln:
-// Wassertemperatur, Wasserwerte, Filterpumpe, Heizungen.
+// Liest getReadings direkt von der Violet-Poolsteuerung.
+// Ansicht 1: Wassertemperatur, Wasserwerte, Filterpumpe, Heizungen.
+// Ansicht 2 (nach links wischen): Dosierung, Licht & Relais.
 //   - Tipp auf Temperatur / Wasserwerte: schaltet durch die Messwerte
-//   - Tipp auf Filterpumpe / Heizungen: Bedienseite
+//   - Tipp auf Filterpumpe / Heizungen / Licht & Relais: Bedienseite
 //   - Zahnrad (oder Kopfzeile 2 s halten): Einstellungen
 //
 // Projekt: https://github.com/AlPi-BRV/violet-display  (MIT-Lizenz)
@@ -24,7 +25,7 @@
 #include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.3.2"
+#define FW_VERSION  "0.3.3"
 #define GITHUB_REPO "AlPi-BRV/violet-display"
 #define UPDATE_CHECK_EVERY_MS (24UL * 60UL * 60UL * 1000UL)
 #define UPDATE_FIRST_CHECK_MS (60UL * 1000UL)
@@ -47,8 +48,14 @@
 #ifndef BW_START_TIMEOUT_MS
 #define BW_START_TIMEOUT_MS (10UL * 60UL * 1000UL)   // Rueckspuelung: Absicherung, falls kein Schritt kommt
 #endif
-#ifndef BW_PUMP_AUTO_TIMEOUT_MS
-#define BW_PUMP_AUTO_TIMEOUT_MS (3UL * 60UL * 1000UL) // Warten auf Pumpe AUTO vor dem Start
+#ifndef BW_POLL_MS
+#define BW_POLL_MS 2000                               // Abfrage waehrend einer Rueckspuelung
+#endif
+#ifndef ROTATE_MS
+#define ROTATE_MS 5000                                // Werte-Wechsel auf der Uebersicht
+#endif
+#ifndef CFG_REFRESH_MS
+#define CFG_REFRESH_MS (6UL * 60UL * 60UL * 1000UL)   // Relaisnamen usw. aus getConfig neu lesen
 #endif
 #ifndef DIM_AFTER_MS
 #define DIM_AFTER_MS   (5UL * 60UL * 1000UL)
@@ -131,7 +138,10 @@ static String   wifiPass   = WIFI_PASS;
 static bool     ipFixed    = false;
 static String   ipAddr, ipMask = "255.255.255.0", ipGw, ipDns;
 static uint32_t pollMs     = POLL_INTERVAL_MS;
-static bool     winterMode = false;
+static bool     winterSolar  = false;   // Winterbetrieb: Absorber gesperrt
+static bool     winterHeater = false;   // Winterbetrieb: Heizung gesperrt
+static bool     rotateVals   = false;   // Temperatur / Wasserwerte alle 5 s wechseln
+static bool     stepNames    = true;    // Rueckspuelung: Schritt 4 = Rueckspuelen, 5 = Nachspuelen
 static String   fwUpdatedFrom;   // gesetzt, wenn seit dem letzten Start aktualisiert wurde
 
 static const uint32_t POLL_CHOICES[] = { 15000, 30000, 60000, 120000, 300000 };
@@ -150,7 +160,14 @@ static void loadSettings() {
   ipGw       = prefs.getString("gw", "");
   ipDns      = prefs.getString("dns", "");
   pollMs     = prefs.getUInt("poll", pollMs);
-  winterMode = prefs.getBool("winter", false);
+  {
+    // bis 0.3.2 gab es nur einen Schalter fuer beide Heizungen
+    bool alt = prefs.getBool("winter", false);
+    winterSolar  = prefs.getBool("winsol", alt);
+    winterHeater = prefs.getBool("winheat", alt);
+  }
+  rotateVals = prefs.getBool("rotate", false);
+  stepNames  = prefs.getBool("bwnames", true);
   prefs.end();
 
   // Nach einem Update einmal Bescheid geben
@@ -180,7 +197,34 @@ struct PoolData {
   int   backwashStep = -1;       // BACKWASH_STEP: 0 = keine Rueckspuelung, 1..6 = Schritt
   bool  backwashDelay = false;   // BACKWASH_DELAY_RUNNING = YES: Rueckspuelung wartet
   String uhrzeit;
+  // Ansicht 2
+  struct Dos {
+    bool   use = false;
+    float  heute = NAN;          // DAILY_DOSING_AMOUNT_ML
+    float  rest = NAN;           // TOTAL_CAN_AMOUNT_ML (Elektrolyse: Zelle)
+    String reicht;               // REMAINING_RANGE, z. B. "74d"
+    String sperre;               // STATE, uebersetzt
+  } dos[5];
+  int   light = -1;
+  int   ext[16];                 // EXT1_1..EXT1_8, EXT2_1..EXT2_8
+  PoolData() { for (int& e : ext) e = -1; }
 };
+
+// Dosierungen: Violet-Name und Anzeige
+static const char* const DOS_KEY[5]  = { "DOS_1_CL", "DOS_2_ELO", "DOS_4_PHM", "DOS_5_PHP", "DOS_6_FLOC" };
+static const char* const DOS_NAME[5] = { "Chlor", "Elektrolyse", "pH-", "pH+", "Flockung" };
+
+// Aus getConfig: welche Relaiserweiterungen es gibt, ihre Namen, Abdeckungsrelais
+struct CfgInfo {
+  bool   loaded = false;
+  bool   ext1 = false, ext2 = false;
+  String name[16];
+  bool   cover[16] = {};         // steuert die Abdeckung -> nicht anbieten
+};
+static CfgInfo  cfg;
+static uint32_t nextCfgFetch = 0;
+
+static String extId(int i) { return String("EXT") + (i < 8 ? "1_" : "2_") + String(i % 8 + 1); }
 
 static PoolData data;
 static uint32_t lastPoll = 0;
@@ -193,8 +237,11 @@ static const char* const TEMP_TITLE[3] = { "Wassertemperatur", "Lufttemperatur",
 static const char* const TEMP_SHORT[3] = { "Wasser", "Luft", "Absorber" };
 
 // Bildschirme und Bedienung
-enum Screen { SCR_OVERVIEW, SCR_PUMP, SCR_HEAT, SCR_SETTINGS };
+enum Screen { SCR_OVERVIEW, SCR_PUMP, SCR_HEAT, SCR_SETTINGS, SCR_SWITCH };
 static Screen   screen = SCR_OVERVIEW;
+static int      ovPage = 0;          // Uebersicht: 0 = Ansicht 1, 1 = Ansicht 2
+static int      swPage = 0;          // Seite der Bedienseite Licht & Relais
+static uint32_t lastRotate = 0;
 static uint32_t lastTouchMs = 0;
 static bool     dimmed = false;
 static bool     needRedraw = true;     // Bildschirm neu aufbauen
@@ -203,10 +250,11 @@ static int      sollStufe = 2;
 static int      pendingSpeed = 2;
 
 // Bestaetigungsdialog
-enum Action { A_NONE, A_PUMP_OFF, A_PUMP_SPEED, A_BW_START, A_BW_PUMP_AUTO, A_SOLAR_ON, A_SOLAR_AUTO,
-              A_HEATER_ON, A_HEATER_AUTO, A_FACTORY, A_OTA };
+enum Action { A_NONE, A_PUMP_OFF, A_PUMP_SPEED, A_BW_START, A_SOLAR_ON, A_SOLAR_AUTO,
+              A_HEATER_ON, A_HEATER_AUTO, A_SWITCH, A_FACTORY, A_OTA };
 static Action   confirmAct = A_NONE;
 static String   confirmL1, confirmL2;
+static String   pendFunc, pendAct;   // fuer A_SWITCH (Licht / Relais)
 
 // Rueckmeldung in der Kopfzeile
 static String   toastText;
@@ -275,13 +323,36 @@ static bool istAn(int s) { return s >= 1 && s <= 4; }
 
 static String statusText(int s) {
   switch (s) {
-    case 0: return "AUS";
-    case 1: case 2: case 3: return "EIN";
-    case 4: return "EIN (Hand)";
+    case 0: return "AUS AUTO";
+    case 1: case 2: case 3: return "EIN AUTO";
+    case 4: return "EIN (MAN)";
     case 5: return "WARTET";
-    case 6: return "AUS (Hand)";
+    case 6: return "AUS (MAN)";
     default: return "--";
   }
+}
+
+static String mengeText(float ml) {
+  if (isnan(ml)) return "--";
+  if (fabsf(ml) >= 1000.0f) return fmt(ml / 1000.0f, 1) + " l";
+  return fmt(ml, 0) + " ml";
+}
+
+// Sperrgruende der Dosierung (DOS_x_STATE) kurz auf Deutsch
+static String sperrText(const char* s) {
+  if (!s || !*s) return "";
+  if (!strcmp(s, "BLOCKED_BY_PUMP_OFF"))   return "Pumpe aus";
+  if (!strcmp(s, "BLOCKED_BY_MAX_AMOUNT")) return "Tagesmenge erreicht";
+  if (strstr(s, "TRESHOLD") || strstr(s, "THRESHOLD")) return "Sollwert erreicht";
+  if (strstr(s, "TIME"))     return "außerhalb der Zeit";
+  if (strstr(s, "BACKWASH")) return "Rückspülung";
+  if (strstr(s, "REFILL"))   return "Nachspeisen";
+  if (strstr(s, "START"))    return "Startverzögerung";
+  String t = s;
+  if (t.startsWith("BLOCKED_BY_")) t.remove(0, 11);
+  t.replace("_", " ");
+  t.toLowerCase();
+  return t;
 }
 
 enum Mode { M_AUTO, M_ON, M_OFF };
@@ -334,7 +405,7 @@ static bool pollViolet() {
 
   static const int SENS[3] = { SENSOR_WASSER, SENSOR_LUFT, SENSOR_ABSORBER };
   JsonDocument filter(&intAlloc);
-  char k[28];
+  char k[48];
   for (int i = 0; i < 3; i++) {
     snprintf(k, sizeof(k), "onewire%d_value", SENS[i]); filter[k] = true;
     snprintf(k, sizeof(k), "onewire%d_state", SENS[i]); filter[k] = true;
@@ -342,8 +413,16 @@ static bool pollViolet() {
   for (const char* f : { "pH_value", "orp_value", "pot_value", "PUMP",
                          "PUMP_RPM_0", "PUMP_RPM_1", "PUMP_RPM_2", "PUMP_RPM_3",
                          "PUMP_RUNTIME", "SOLAR", "HEATER", "BACKWASH", "BACKWASH_STEP",
-                         "BACKWASH_DELAY_RUNNING", "time" })
+                         "BACKWASH_DELAY_RUNNING", "LIGHT", "time" })
     filter[f] = true;
+  static const char* const DOS_FIELD[5] = { "USE", "DAILY_DOSING_AMOUNT_ML", "TOTAL_CAN_AMOUNT_ML",
+                                            "REMAINING_RANGE", "STATE" };
+  for (int d = 0; d < 5; d++)
+    for (int f = 0; f < 5; f++) {
+      snprintf(k, sizeof(k), "%s_%s", DOS_KEY[d], DOS_FIELD[f]);
+      filter[k] = true;
+    }
+  for (int i = 0; i < 16; i++) filter[extId(i)] = true;
 
   JsonDocument doc(&intAlloc);
   DeserializationError err = deserializeJson(doc, http.getStream(),
@@ -380,6 +459,31 @@ static bool pollViolet() {
   {
     JsonVariant d = doc["BACKWASH_DELAY_RUNNING"];
     n.backwashDelay = d.is<const char*>() ? strcasecmp(d.as<const char*>(), "YES") == 0 : (d.as<int>() == 1);
+  }
+  n.light = ji(doc, "LIGHT");
+  for (int i = 0; i < 16; i++) n.ext[i] = ji(doc, extId(i).c_str());
+  for (int d = 0; d < 5; d++) {
+    PoolData::Dos& o = n.dos[d];
+    snprintf(k, sizeof(k), "%s_USE", DOS_KEY[d]);
+    o.use = ji(doc, k) == 1;
+    snprintf(k, sizeof(k), "%s_DAILY_DOSING_AMOUNT_ML", DOS_KEY[d]);
+    o.heute = jf(doc, k);
+    snprintf(k, sizeof(k), "%s_TOTAL_CAN_AMOUNT_ML", DOS_KEY[d]);
+    o.rest = jf(doc, k);
+    snprintf(k, sizeof(k), "%s_REMAINING_RANGE", DOS_KEY[d]);
+    o.reicht = doc[k] | "";
+    snprintf(k, sizeof(k), "%s_STATE", DOS_KEY[d]);
+    JsonVariant st = doc[k];
+    if (st.is<JsonArray>()) {
+      for (JsonVariant e : st.as<JsonArray>()) {
+        String s = sperrText(e | "");
+        if (!s.length() || o.sperre.indexOf(s) >= 0) continue;
+        if (o.sperre.length()) o.sperre += ", ";
+        o.sperre += s;
+      }
+    } else {
+      o.sperre = sperrText(st | "");
+    }
   }
   String t = doc["time"] | "";
   n.uhrzeit = t.length() >= 5 ? t.substring(0, 5) : t;
@@ -461,26 +565,94 @@ static int testLogin(const String& host, const String& user, const String& pass)
   return code;
 }
 
+// Relaiserweiterungen, Relaisnamen und Abdeckungsrelais aus getConfig (braucht Login)
+static bool fetchConfig() {
+  if (WiFi.status() != WL_CONNECTED || violetHost.length() == 0) return false;
+  HTTPClient http;
+  http.useHTTP10(true);
+  http.setTimeout(8000);
+  http.setConnectTimeout(3000);
+  if (!http.begin("http://" + violetHost + "/getConfig?ALL")) return false;
+  if (violetUser.length() > 0) http.setAuthorization(violetUser.c_str(), violetPass.c_str());
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("getConfig: HTTP %d\n", code);
+    http.end();
+    return false;
+  }
+  JsonDocument filter(&intAlloc);
+  for (const char* f : { "EXTENSION_1_use", "EXTENSION_2_use", "COVER_control_use",
+                         "COVER_output_open", "COVER_output_close", "COVER_output_stop" })
+    filter[f] = true;
+  for (int i = 0; i < 16; i++) {
+    String key = String("NAMES_") + extId(i);
+    filter[key] = true;
+  }
+  JsonDocument doc(&intAlloc);
+  DeserializationError err = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (err) {
+    Serial.printf("getConfig JSON-Fehler: %s\n", err.c_str());
+    return false;
+  }
+  CfgInfo c;
+  c.ext1 = ji(doc, "EXTENSION_1_use") == 1;
+  c.ext2 = ji(doc, "EXTENSION_2_use") == 1;
+  for (int i = 0; i < 16; i++) {
+    String key = String("NAMES_") + extId(i);
+    String nm = doc[key] | "";
+    nm.trim();
+    c.name[i] = nm.length() ? nm : extId(i);
+  }
+  if (ji(doc, "COVER_control_use") == 1) {
+    for (const char* f : { "COVER_output_open", "COVER_output_close", "COVER_output_stop" }) {
+      String o = doc[f] | "";
+      for (int i = 0; i < 16; i++) if (o == extId(i)) c.cover[i] = true;
+    }
+  }
+  c.loaded = true;
+  cfg = c;
+  Serial.printf("getConfig: EXT1 %d, EXT2 %d\n", c.ext1, c.ext2);
+  return true;
+}
+
+// Relais, die auf Ansicht 2 angeboten werden (vorhanden und nicht fuer die Abdeckung)
+static int relayList(int* out) {
+  int n = 0;
+  if (!cfg.loaded) return 0;
+  for (int i = 0; i < 16; i++) {
+    if (!(i < 8 ? cfg.ext1 : cfg.ext2) || cfg.cover[i]) continue;
+    out[n++] = i;
+  }
+  return n;
+}
+
 // ---------------------------------------------------------------
 // Manuelle Rueckspuelung – Regeln von PoolDigital:
-//  - Start nur bei BACKWASH_STEP == 0 und PUMP 0/1 (AUTO aus / AUTO an)
+//  - Start nur bei BACKWASH_STEP == 0 und PUMP 0/1 (AUTO aus / AUTO an);
+//    steht die Pumpe auf Hand, wird der Start abgelehnt (nichts umgestellt)
 //  - vorherigen Modus der Rueckspuelautomatik dauerhaft merken
 //  - falls nicht AUTO: BACKWASH,AUTO – dann BACKWASH,ON
 //  - Ende: STEP war > 0 und ist wieder 0 -> gemerkten Modus herstellen
 //    (OFF erst bei STEP 0 senden, sonst bricht die Rueckspuelung ab)
 //  - Absicherung: kommt nach ca. 10 min kein Schritt, ebenfalls zurueck
-//  - Schritte 1..6 haben keine festen Bedeutungen: nur "Schritt X/6"
+//  - Schritte 1..6 haben keine festen Bedeutungen. Optional (Einstellungen)
+//    werden 4 = Rueckspuelen und 5 = Nachspuelen benannt.
+//  - waehrend der Rueckspuelung alle 2 s abfragen
 // ---------------------------------------------------------------
-enum BwPhase : uint8_t { BW_IDLE = 0, BW_WAIT_PUMP = 1, BW_STARTED = 2, BW_RUNNING = 3 };
+enum BwPhase : uint8_t { BW_IDLE = 0, BW_STARTED = 2, BW_RUNNING = 3 };   // Werte wie in 0.3.2 (gespeichert)
 static BwPhase  bwPhase = BW_IDLE;
 static uint8_t  bwPrevMode = M_AUTO;   // Modus der Rueckspuelautomatik vor dem Start (AUTO oder AUS)
 static uint32_t bwSince = 0;
 
 static bool pumpeAuto(int p) { return p == 0 || p == 1; }
 
+// Rueckspuelung aktiv (von uns gestartet oder von der Violet selbst)
+static bool bwActive() { return bwPhase != BW_IDLE || data.backwashStep > 0 || data.backwashDelay; }
+
 static void bwSave() {
   prefs.begin("pooldisp", false);
-  prefs.putUChar("bwphase", bwPhase == BW_WAIT_PUMP ? BW_IDLE : bwPhase);
+  prefs.putUChar("bwphase", bwPhase);
   prefs.putUChar("bwprev", bwPrevMode);
   prefs.end();
 }
@@ -498,11 +670,18 @@ static void bwLoad() {
                   bwPrevMode == M_OFF ? "AUS" : "AUTO");
 }
 
+// Name des Schritts (nur wenn in den Einstellungen eingeschaltet)
+static String bwStepName() {
+  if (!stepNames) return "";
+  if (data.backwashStep == 4) return "Rückspülen";
+  if (data.backwashStep == 5) return "Nachspülen";
+  return "";
+}
+
 // Anzeige-Text fuer Kachel und Taste, leer = keine Rueckspuelung
 static String bwStatusText() {
   if (data.backwashStep > 0) return "Rückspülung · Schritt " + String(data.backwashStep) + "/6";
   if (data.backwashDelay) return "Rückspülung wartet";
-  if (bwPhase == BW_WAIT_PUMP) return "Rückspülung: Pumpe auf AUTO ...";
   if (bwPhase == BW_STARTED || bwPhase == BW_RUNNING) return "Rückspülung wird gestartet ...";
   if (data.backwashStep < 0 && istAn(data.backwash)) return "Rückspülung läuft";   // ohne STEP-Feld
   return "";
@@ -536,45 +715,25 @@ static void bwDoStart() {
     toast(t, C_ACC_ORG, 8000);
     return;
   }
+  pollSoonAt = millis() + BW_POLL_MS;
   toast("Rückspülung gestartet", C_ACC_GRN, 6000);
 }
+
+static const char* const BW_PUMP_MSG = "Rückspülung abgelehnt – Pumpe steht nicht auf AUTO";
 
 // Nach Bestaetigung: Bedingungen pruefen und starten
 static void bwRequest() {
   if (!data.valid) { toast("Keine Daten von der Violet", C_ACC_ORG); return; }
-  if (bwPhase != BW_IDLE || data.backwashStep > 0 || data.backwashDelay) {
-    toast("Rückspülung läuft bereits", C_ACC_ORG);
-    return;
-  }
+  if (bwActive()) { toast("Rückspülung läuft bereits", C_ACC_ORG); return; }
   if (data.backwashStep != 0) { toast("Violet meldet keinen Rückspülschritt", C_ACC_ORG, 8000); return; }
-  if (!pumpeAuto(data.pump)) {
-    askConfirm(A_BW_PUMP_AUTO, "Pumpe ist manuell geschaltet.", "Auf AUTO stellen und Rückspülung starten?");
-    return;
-  }
+  if (!pumpeAuto(data.pump)) { toast(BW_PUMP_MSG, C_ACC_ORG, 10000); return; }
   bwDoStart();
-}
-
-// Pumpe auf AUTO stellen, Start folgt nach dem naechsten Abruf mit PUMP 0/1
-static void bwPumpAutoThenStart() {
-  if (!sendCommand("PUMP", "AUTO", 0)) return;
-  bwPhase = BW_WAIT_PUMP;
-  bwSince = millis();
-  toast("Pumpe auf AUTO – Rückspülung startet gleich", C_ACC_GRN, 6000);
 }
 
 // Nach jedem erfolgreichen Abruf
 static void bwAfterPoll() {
   int st = data.backwashStep;
   switch (bwPhase) {
-    case BW_WAIT_PUMP:
-      if (pumpeAuto(data.pump) && st == 0) {
-        bwPhase = BW_IDLE;
-        bwDoStart();
-      } else if (millis() - bwSince > BW_PUMP_AUTO_TIMEOUT_MS) {
-        bwPhase = BW_IDLE;
-        toast("Pumpe nicht auf AUTO – Rückspülung nicht gestartet", C_ACC_ORG, 10000);
-      }
-      break;
     case BW_STARTED:
       if (st > 0) {
         bwPhase = BW_RUNNING;
@@ -588,7 +747,7 @@ static void bwAfterPoll() {
       break;
     default: break;
   }
-  if (bwPhase != BW_IDLE) needRedraw = true;
+  if (bwActive()) needRedraw = true;
 }
 
 // ---------------------------------------------------------------
@@ -809,7 +968,7 @@ static void drawDialog() {
 // ---------------------------------------------------------------
 static String headerKey() {
   String k = String(wifiBars()) + "|" + data.uhrzeit + "|" + String((int)(data.valid && failCount < 3)) +
-             "|" + updateVersion;
+             "|" + updateVersion + "|P" + String(ovPage);
   if (millis() < toastUntil) k += "|T" + toastText;
   return k;
 }
@@ -819,6 +978,12 @@ static void drawOverviewHeader() {
   useFont(fT);
   text("Pool", M + 6, HEAD / 2, C_ACC_BLUE, ML_DATUM);
   drawGear(R_GEAR.x + R_GEAR.w / 2, HEAD / 2, C_DIM, C_BG);
+  // Punkte: welche Ansicht (wischen zum Wechseln)
+  for (int i = 0; i < 2; i++) {
+    int x = 166 + i * 16;
+    if (i == ovPage) canvas.fillSmoothCircle(x, HEAD / 2, 5, C_DIM);
+    else canvas.drawCircle(x, HEAD / 2, 5, C_DIM);
+  }
 
   int wx = 800 - M - 20;
   drawWifi(wx, HEAD / 2 + 12, wifiBars());
@@ -827,7 +992,7 @@ static void drawOverviewHeader() {
   bool online = data.valid && failCount < 3;
   useFont(fT);
   if (millis() < toastUntil) {
-    fitFont(toastText, xr - 170, &fT, &fS);
+    fitFont(toastText, xr - 200, &fT, &fS);
     text(toastText, xr, HEAD / 2, toastColor, MR_DATUM);
   } else if (WiFi.status() != WL_CONNECTED) {
     text("WLAN getrennt", xr, HEAD / 2, C_ACC_ORG, MR_DATUM);
@@ -941,7 +1106,7 @@ static void drawWaterTile() {
 // Filterpumpe
 static String pumpKey() {
   return String(data.pump) + "|" + String(data.pumpStufe) + "|" + laufzeitKurz(data.pumpLaufzeit) + "|" +
-         String(data.backwash) + "|" + bwStatusText();
+         String(data.backwash) + "|" + bwStatusText() + "|" + bwStepName();
 }
 
 static void drawPumpTile() {
@@ -951,27 +1116,154 @@ static void drawPumpTile() {
   String p = statusText(data.pump);
   if (istAn(data.pump) && stufeText(data.pumpStufe).length()) p += "  " + stufeText(data.pumpStufe);
   uint16_t col = istAn(data.pump) ? C_ACC_GRN : C_TEXT;
-  String bw = bwStatusText();
-  if (bw.length()) { p = bw; col = C_ACC_BLUE; }
+  String sub;
+  if (data.backwashStep > 0) {
+    p = "Rückspülung " + String(data.backwashStep) + "/6";
+    sub = bwStepName();
+    col = C_ACC_BLUE;
+  } else {
+    String bw = bwStatusText();
+    if (bw.length()) { p = bw; col = C_ACC_BLUE; }
+  }
   fitFont(p, r.w - 32, &fM, &fB, &fT);
   text(p, r.x + 16, r.y + r.h / 2 + 4, col, ML_DATUM);
-  smallLine(r, "Laufzeit heute " + laufzeitKurz(data.pumpLaufzeit), C_DIM);
+  if (sub.length()) smallLine(r, sub, C_ACC_BLUE);
+  else smallLine(r, "Laufzeit heute " + laufzeitKurz(data.pumpLaufzeit), C_DIM);
 }
 
 // Heizungen
-static String heatKey() { return String(data.solar) + "|" + String(data.heater) + "|" + String((int)winterMode); }
+static String heatKey() {
+  return String(data.solar) + "|" + String(data.heater) + "|" + String((int)winterSolar) + String((int)winterHeater);
+}
 
 static void drawHeatTile() {
   Rect r = tileRect(1, 1);
-  tileBase(r, C_HEAT, winterMode ? "Heizungen – gesperrt" : "Heizungen", C_ACC_ORG);
+  tileBase(r, C_HEAT, (winterSolar && winterHeater) ? "Heizungen – Winterbetrieb" : "Heizungen", C_ACC_ORG);
   drawChevron(r.x + r.w - 30, r.y + 26, C_ACC_ORG);
   const int y1 = r.y + r.h / 2 - 14, y2 = r.y + r.h / 2 + 46;
   useFont(fT);
-  text("Absorber", r.x + 16, y1, C_ACC_ORG, ML_DATUM);
-  text("Heizung", r.x + 16, y2, C_ACC_ORG, ML_DATUM);
+  text(winterSolar ? "Absorber · Winter" : "Absorber", r.x + 16, y1, C_ACC_ORG, ML_DATUM);
+  text(winterHeater ? "Heizung · Winter" : "Heizung", r.x + 16, y2, C_ACC_ORG, ML_DATUM);
   useFont(fB);
   text(statusText(data.solar), r.x + r.w - 16, y1, istAn(data.solar) ? C_ACC_GRN : C_TEXT, MR_DATUM);
   text(statusText(data.heater), r.x + r.w - 16, y2, istAn(data.heater) ? C_ACC_GRN : C_TEXT, MR_DATUM);
+}
+
+// ---------------------------------------------------------------
+// Ansicht 2: Dosierung | Licht & Relais (Kacheln doppelt hoch)
+// ---------------------------------------------------------------
+static Rect tall(int col) { return { M + col * (TW + M), HEAD, TW, 2 * TH + M }; }
+
+static bool dosLeer(const PoolData::Dos& d) {
+  return (!isnan(d.rest) && d.rest <= 0) || d.reicht == "0h" || d.reicht == "0d";
+}
+
+static String dosKey() {
+  String k = String((int)data.valid);
+  for (int i = 0; i < 5; i++) {
+    const PoolData::Dos& d = data.dos[i];
+    if (!d.use) continue;
+    k += "|" + String(i) + fmt(d.heute, 0) + "/" + fmt(d.rest, 0) + "/" + d.reicht + "/" + d.sperre;
+  }
+  return k;
+}
+
+static void drawDosTile() {
+  Rect r = tall(0);
+  tileBase(r, C_TILE, "Dosierung", C_ACC_GRN);
+  int idx[5], n = 0;
+  for (int i = 0; i < 5; i++) if (data.dos[i].use) idx[n++] = i;
+  if (!data.valid || n == 0) {
+    useFont(fT);
+    text(data.valid ? "Keine Dosierung aktiv" : "--", r.x + 16, r.y + r.h / 2, C_DIM, ML_DATUM);
+    return;
+  }
+  const int top = r.y + 56;
+  int bh = (r.y + r.h - 12 - top) / n;
+  if (bh > 112) bh = 112;
+  for (int k = 0; k < n; k++) {
+    const PoolData::Dos& d = data.dos[idx[k]];
+    bool elo = idx[k] == 1;
+    int y = top + k * bh;
+    if (k > 0) canvas.drawFastHLine(r.x + 16, y - 6, r.w - 32, C_BG);
+    useFont(fB);
+    text(DOS_NAME[idx[k]], r.x + 16, y + 16, C_TEXT, ML_DATUM);
+    useFont(fT);
+    if (!elo) text("heute " + mengeText(d.heute), r.x + r.w - 16, y + 16, C_DIM, MR_DATUM);
+
+    String l2;
+    uint16_t c2 = C_DIM;
+    if (elo) {
+      l2 = "Zelle Rest " + fmt(d.rest, 0) + " h";
+    } else if (dosLeer(d)) {
+      l2 = "Kanister leer – bitte wechseln";
+      c2 = C_ACC_RED;
+    } else {
+      l2 = "Kanister " + mengeText(d.rest);
+      if (d.reicht.length()) l2 += " · reicht " + d.reicht;
+    }
+    fitFont(l2, r.w - 32, &fT, &fS);
+    text(l2, r.x + 16, y + 50, c2, ML_DATUM);
+    if (d.sperre.length() && bh >= 90) {
+      String l3 = "gesperrt: " + d.sperre;
+      fitFont(l3, r.w - 32, &fS);
+      text(l3, r.x + 16, y + 80, C_ACC_ORG, ML_DATUM);
+    }
+  }
+}
+
+// Eintraege der Licht/Relais-Liste: -1 = Licht, sonst Relais-Index
+static int switchItems(int* out) {
+  int n = 0;
+  if (data.light >= 0) out[n++] = -1;
+  int rl[16];
+  int m = relayList(rl);
+  for (int i = 0; i < m; i++) out[n++] = rl[i];
+  return n;
+}
+
+static String itemName(int it) { return it < 0 ? String("Licht") : cfg.name[it]; }
+static int itemState(int it) { return it < 0 ? data.light : data.ext[it]; }
+static const char* itemFunc(int it) {
+  static char buf[8];
+  if (it < 0) return "LIGHT";
+  snprintf(buf, sizeof(buf), "EXT%d_%d", it < 8 ? 1 : 2, it % 8 + 1);
+  return buf;
+}
+
+static String switchKey() {
+  int it[17];
+  int n = switchItems(it);
+  String k = String((int)cfg.loaded);
+  for (int i = 0; i < n; i++) k += "|" + itemName(it[i]) + String(itemState(it[i]));
+  return k;
+}
+
+static void drawSwitchTile() {
+  Rect r = tall(1);
+  tileBase(r, C_TILE, "Licht & Relais", C_ACC_BLUE);
+  drawChevron(r.x + r.w - 30, r.y + 26, C_ACC_BLUE);
+  int it[17];
+  int n = switchItems(it);
+  const int top = r.y + 56, rh = 44;
+  int maxRows = (r.y + r.h - 12 - top) / rh;
+  bool more = n > maxRows;
+  int shown = more ? maxRows - 1 : n;
+  for (int i = 0; i < shown; i++) {
+    int y = top + i * rh + rh / 2;
+    int st = itemState(it[i]);
+    useFont(fB);
+    String s = statusText(st);
+    int sw = canvas.textWidth(s);
+    text(s, r.x + r.w - 16, y, istAn(st) ? C_ACC_GRN : C_TEXT, MR_DATUM);
+    String nm = itemName(it[i]);
+    fitFont(nm, r.w - 48 - sw, &fT, &fS);
+    text(nm, r.x + 16, y, C_TEXT, ML_DATUM);
+  }
+  useFont(fS);
+  if (more) text("+ " + String(n - shown) + " weitere", r.x + 16, top + shown * rh + rh / 2, C_DIM, ML_DATUM);
+  if (!cfg.loaded)
+    text("Relais: Einstellungen der Violet nicht lesbar (Login?)", r.x + 16, r.y + r.h - 18, C_DIM, ML_DATUM);
 }
 
 // Nur die Bereiche neu zeichnen und uebertragen, die sich geaendert haben –
@@ -979,18 +1271,33 @@ static void drawHeatTile() {
 static String lastKeys[5];
 
 static void drawOverview(bool full) {
-  String keys[5] = { headerKey(), tempKey(), waterKey(), pumpKey(), heatKey() };
-  const Rect regions[5] = { R_HEADER, tileRect(0, 0), tileRect(1, 0), tileRect(0, 1), tileRect(1, 1) };
+  String keys[5];
+  Rect regions[5];
+  int cnt;
+  if (ovPage == 0) {
+    cnt = 5;
+    String k[5] = { headerKey(), tempKey(), waterKey(), pumpKey(), heatKey() };
+    Rect g[5] = { R_HEADER, tileRect(0, 0), tileRect(1, 0), tileRect(0, 1), tileRect(1, 1) };
+    for (int i = 0; i < 5; i++) { keys[i] = k[i]; regions[i] = g[i]; }
+  } else {
+    cnt = 3;
+    keys[0] = headerKey(); keys[1] = dosKey(); keys[2] = switchKey();
+    regions[0] = R_HEADER; regions[1] = tall(0); regions[2] = tall(1);
+  }
   if (full) canvas.fillScreen(C_BG);
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < cnt; i++) {
     if (!full && keys[i] == lastKeys[i]) continue;
     lastKeys[i] = keys[i];
-    switch (i) {
-      case 0: drawOverviewHeader(); break;
-      case 1: drawTempTile(); break;
-      case 2: drawWaterTile(); break;
-      case 3: drawPumpTile(); break;
-      default: drawHeatTile(); break;
+    if (i == 0) drawOverviewHeader();
+    else if (ovPage == 0) {
+      switch (i) {
+        case 1: drawTempTile(); break;
+        case 2: drawWaterTile(); break;
+        case 3: drawPumpTile(); break;
+        default: drawHeatTile(); break;
+      }
+    } else {
+      if (i == 1) drawDosTile(); else drawSwitchTile();
     }
     if (!full) pushRegion(regions[i]);
   }
@@ -1050,6 +1357,7 @@ static void drawPump() {
 
   // Waehrend einer Rueckspuelung ist die Start-Taste gesperrt
   String bw = bwStatusText();
+  if (bw.length() && bwStepName().length()) bw += " · " + bwStepName();
   if (bw.length())
     button(R_BW, bw, true, C_BTN_RED);
   else
@@ -1069,7 +1377,7 @@ static void pumpTap(int x, int y) {
   } else if (hit(R_BW, x, y)) {
     if (bwStatusText().length()) return;          // laeuft / wartet / wird gestartet
     if (!pumpeAuto(data.pump))
-      askConfirm(A_BW_PUMP_AUTO, "Pumpe ist manuell geschaltet.", "Auf AUTO stellen und Rückspülung starten?");
+      toast(BW_PUMP_MSG, C_ACC_ORG, 10000);       // Pumpe auf Hand: ablehnen, nichts umstellen
     else
       askConfirm(A_BW_START, "Rückspülung jetzt", "manuell starten?");
   } else {
@@ -1102,6 +1410,7 @@ static void drawHeat() {
   pageHeader("Heizungen");
   const char* names[2] = { "Absorber", "Heizung" };
   int st[2] = { data.solar, data.heater };
+  bool lock[2] = { winterSolar, winterHeater };
   for (int row = 0; row < 2; row++) {
     Rect b0 = heatBtn(row, 0);
     useFont(fB);
@@ -1109,8 +1418,8 @@ static void drawHeat() {
     useFont(fT);
     text("Status: " + statusText(st[row]), 800 - M - 4, b0.y - 12, istAn(st[row]) ? C_ACC_GRN : C_TEXT,
          BR_DATUM);
-    if (winterMode) {
-      const String hint = "Gesperrt – Winterbetrieb (Einstellungen > System)";
+    if (lock[row]) {
+      const String hint = "Gesperrt – Winterbetrieb (Einstellungen > Anzeige)";
       canvas.fillSmoothRoundRect(M, b0.y, 800 - 2 * M, b0.h, 12, C_TILE);
       fitFont(hint, 800 - 4 * M, &fT, &fS);
       text(hint, 400, b0.y + b0.h / 2, C_DIM, MC_DATUM);
@@ -1130,8 +1439,8 @@ static void heatTap(int x, int y) {
     needFull = true;
     return;
   }
-  if (winterMode) return;
   for (int row = 0; row < 2; row++) {
+    if (row == 0 ? winterSolar : winterHeater) continue;
     const char* func = row == 0 ? "SOLAR" : "HEATER";
     const String name = row == 0 ? "Absorber" : "Heizung";
     if (hit(heatBtn(row, 0), x, y)) {
@@ -1146,7 +1455,91 @@ static void heatTap(int x, int y) {
 }
 
 // ---------------------------------------------------------------
-// Einstellungen – Reiter Violet | WLAN | IP | System
+// Bedienseite Licht & Relais (5 Zeilen je Seite)
+// ---------------------------------------------------------------
+static const int SW_ROWS = 5;
+static const Rect R_SWNEXT = { 800 - M - 170 - 10 - 150, 5, 150, HEAD - 8 };
+static Rect swBtn(int row, int col) { return { 330 + col * 155, HEAD + 14 + row * 84, 145, 64 }; }
+
+static int swPages(int n) { return n <= 0 ? 1 : (n + SW_ROWS - 1) / SW_ROWS; }
+
+static void drawSwitch() {
+  int it[17];
+  int n = switchItems(it);
+  int pages = swPages(n);
+  if (swPage >= pages) swPage = 0;
+
+  useFont(fT);
+  text("Licht & Relais", M + 6, HEAD / 2, C_ACC_BLUE, ML_DATUM);
+  int msgRight = R_BACK.x - 16;
+  if (pages > 1) {
+    button(R_SWNEXT, "Seite " + String(swPage + 1) + "/" + String(pages) + " >", false, C_BTN, C_TEXT, true);
+    msgRight = R_SWNEXT.x - 16;
+  }
+  if (millis() < toastUntil) {
+    fitFont(toastText, msgRight - 230, &fT, &fS);
+    text(toastText, msgRight, HEAD / 2, toastColor, MR_DATUM);
+  }
+  button(R_BACK, "< Zurück", false, C_BTN, C_TEXT, true);
+
+  if (n == 0) {
+    useFont(fT);
+    text(cfg.loaded ? "Kein Licht und keine Relais gefunden" : "Relais: Einstellungen der Violet nicht lesbar",
+         400, 240, C_DIM, MC_DATUM);
+    return;
+  }
+  for (int row = 0; row < SW_ROWS; row++) {
+    int i = swPage * SW_ROWS + row;
+    if (i >= n) break;
+    int st = itemState(it[i]);
+    Rect b0 = swBtn(row, 0);
+    String nm = itemName(it[i]);
+    fitFont(nm, b0.x - M - 16, &fB, &fT, &fS);
+    text(nm, M + 4, b0.y + 20, C_TEXT, ML_DATUM);
+    useFont(fS);
+    text(statusText(st), M + 4, b0.y + 50, istAn(st) ? C_ACC_GRN : C_DIM, ML_DATUM);
+    Mode md = modeOf(st);
+    button(swBtn(row, 0), "EIN",  md == M_ON);
+    button(swBtn(row, 1), "AUS",  md == M_OFF);
+    button(swBtn(row, 2), "AUTO", md == M_AUTO);
+  }
+}
+
+static void switchTap(int x, int y) {
+  needRedraw = true;
+  if (hit(R_BACK, x, y)) {
+    screen = SCR_OVERVIEW;
+    needFull = true;
+    return;
+  }
+  int it[17];
+  int n = switchItems(it);
+  int pages = swPages(n);
+  if (pages > 1 && hit(R_SWNEXT, x, y)) {
+    swPage = (swPage + 1) % pages;
+    return;
+  }
+  for (int row = 0; row < SW_ROWS; row++) {
+    int i = swPage * SW_ROWS + row;
+    if (i >= n) break;
+    for (int col = 0; col < 3; col++) {
+      if (!hit(swBtn(row, col), x, y)) continue;
+      const char* act = col == 0 ? "ON" : (col == 1 ? "OFF" : "AUTO");
+      if (it[i] < 0 || col == 2) {
+        sendCommand(itemFunc(it[i]), act, 0);           // Licht und AUTO direkt
+      } else {
+        pendFunc = itemFunc(it[i]);
+        pendAct = act;
+        askConfirm(A_SWITCH, itemName(it[i]) + " wirklich",
+                   col == 0 ? "manuell EINschalten?" : "manuell AUSschalten?");
+      }
+      return;
+    }
+  }
+}
+
+// ---------------------------------------------------------------
+// Einstellungen – Reiter Violet | WLAN | IP | Anzeige | System
 // ---------------------------------------------------------------
 // Felder: 0 IP, 1 Benutzer, 2 Passwort, 3 WLAN, 4 WLAN-Passwort,
 //         5 feste IP, 6 Subnetz, 7 Gateway, 8 DNS
@@ -1157,7 +1550,7 @@ static int      edTab = 0;
 static bool     edShowPass = false;
 static bool     edIpFixed = false;
 static uint32_t edPoll = 30000;
-static bool     edWinter = false;
+static bool     edWinSol = false, edWinHeat = false, edRotate = false, edNames = true;
 enum KbLayer { KB_LOWER, KB_UPPER, KB_SYM };
 static KbLayer  kbLayer = KB_LOWER;
 
@@ -1168,14 +1561,15 @@ static int    scanRssi[8];
 
 static const char* const FIELD_LABEL[NF] = { "IP der Violet", "Benutzer", "Passwort", "WLAN", "WLAN-Passwort",
                                              "IP-Adresse", "Subnetz", "Gateway", "DNS" };
-static const char* const TAB_NAME[4] = { "Violet", "WLAN", "IP", "System" };
+static const int NTAB = 5;
+static const char* const TAB_NAME[NTAB] = { "Violet", "WLAN", "IP", "Anzeige", "System" };
 
 static const int FY0 = HEAD + 4;
 static const int FH  = 42;
 static const int FG  = 6;
 static const int FX  = 230;
 static const int SIDE_BTN_W = 130;
-static Rect tabRect(int i) { return { M + i * 122, 5, 116, HEAD - 8 }; }
+static Rect tabRect(int i) { return { M + i * 98, 5, 92, HEAD - 8 }; }
 static const Rect R_CANCEL = { 800 - M - 140 - 8 - 140, 5, 140, HEAD - 8 };
 static const Rect R_SAVE   = { 800 - M - 140, 5, 140, HEAD - 8 };
 
@@ -1204,10 +1598,11 @@ static Rect padKey(int i) { return { PAD_X + (i % 3) * (PAD_W + 8), PAD_Y + (i /
 
 // Reiter System
 static Rect pollBtn(int i) { return { 250 + i * 108, HEAD + 22, 100, 60 }; }
-static const Rect R_WIN_OFF = { 250, HEAD + 112, 130, 60 };
-static const Rect R_WIN_ON  = { 390, HEAD + 112, 130, 60 };
-static const Rect R_UPD     = { 250, HEAD + 202, 540, 60 };
-static const Rect R_FACT    = { 250, HEAD + 292, 300, 60 };
+static const Rect R_UPD     = { 250, HEAD + 112, 540, 60 };
+static const Rect R_FACT    = { 250, HEAD + 202, 300, 60 };
+
+// Reiter Anzeige: Zeile 0 Werte-Wechsel, 1 Schrittnamen, 2 Winter Absorber, 3 Winter Heizung
+static Rect optBtn(int row, int col) { return { 250 + col * 150, HEAD + 22 + row * 92, 140, 60 }; }
 
 // Tastatur (Violet/WLAN)
 static const char* const KB_ROWS[3][5][11] = {
@@ -1274,7 +1669,10 @@ static void openSettings(int tab) {
   edVal[8] = ipDns;
   edIpFixed = ipFixed;
   edPoll = pollMs;
-  edWinter = winterMode;
+  edWinSol = winterSolar;
+  edWinHeat = winterHeater;
+  edRotate = rotateVals;
+  edNames = stepNames;
   edTab = tab;
   edField = tab == 0 ? 0 : (tab == 1 ? 3 : 5);
   edShowPass = false;
@@ -1294,7 +1692,15 @@ static void showMessage(const String& s) {
 
 static void scanWifi() {
   showMessage("Suche WLAN-Netze ...");
+  // Solange das Display ein (altes) WLAN vergeblich sucht, schlaegt die Suche fehl:
+  // Verbindungsversuch dann erst beenden.
+  if (WiFi.status() != WL_CONNECTED) { WiFi.disconnect(); delay(300); }
   int n = WiFi.scanNetworks();
+  if (n <= 0) {
+    WiFi.disconnect();
+    delay(500);
+    n = WiFi.scanNetworks();
+  }
   scanN = 0;
   for (int pass = 0; pass < n && scanN < 8; pass++) {
     int best = -1;
@@ -1388,7 +1794,7 @@ static void drawSettingsBody() {
     drawWifiList();
     return;
   }
-  for (int i = 0; i < 4; i++) button(tabRect(i), TAB_NAME[i], edTab == i, C_BTN, C_TEXT, true);
+  for (int i = 0; i < NTAB; i++) button(tabRect(i), TAB_NAME[i], edTab == i, C_BTN, C_TEXT, true);
   button(R_CANCEL, "Abbrechen", false, C_BTN, C_TEXT, true);
   button(R_SAVE, "Speichern", false, C_BTN, C_ACC_GRN, true);
 
@@ -1440,17 +1846,26 @@ static void drawSettingsBody() {
         text(PAD_KEYS[i], k.x + k.w / 2, k.y + k.h / 2, C_TEXT, MC_DATUM);
       }
     }
+  } else if (edTab == 3) {
+    static const char* const T1[4] = { "Werte wechseln", "Rückspülung", "Absorber", "Heizung" };
+    static const char* const T2[4] = { "Temperatur und Wasserwerte", "Schritt 4 Rückspülen, 5 Nachspülen",
+                                       "Winterbetrieb: Bedienung sperren", "Winterbetrieb: Bedienung sperren" };
+    static const char* const B0[4] = { "Fest", "Ohne Namen", "Frei", "Frei" };
+    static const char* const B1[4] = { "Alle 5 s", "Mit Namen", "Gesperrt", "Gesperrt" };
+    bool val[4] = { edRotate, edNames, edWinSol, edWinHeat };
+    for (int row = 0; row < 4; row++) {
+      Rect b = optBtn(row, 0);
+      useFont(fT);
+      text(T1[row], M + 6, b.y + 16, C_TEXT, ML_DATUM);
+      fitFont(T2[row], 240 - M, &fS);
+      text(T2[row], M + 6, b.y + 46, C_DIM, ML_DATUM);
+      button(optBtn(row, 0), B0[row], !val[row]);
+      button(optBtn(row, 1), B1[row], val[row]);
+    }
   } else {
     useFont(fT);
     text("Abfrage alle", M + 6, pollBtn(0).y + 30, C_TEXT, ML_DATUM);
     for (int i = 0; i < 5; i++) button(pollBtn(i), POLL_LABEL[i], edPoll == POLL_CHOICES[i]);
-
-    useFont(fT);
-    text("Winterbetrieb", M + 6, R_WIN_OFF.y + 18, C_TEXT, ML_DATUM);
-    useFont(fS);
-    text("sperrt die Heizungen", M + 6, R_WIN_OFF.y + 46, C_DIM, ML_DATUM);
-    button(R_WIN_OFF, "Aus", !edWinter);
-    button(R_WIN_ON, "Ein", edWinter);
 
     useFont(fT);
     text("Firmware " FW_VERSION, M + 6, R_UPD.y + 30, C_TEXT, ML_DATUM);
@@ -1508,6 +1923,16 @@ static void saveSettings() {
     }
   }
 
+  // Neues WLAN, aber feste IP aus dem alten Netz: einmal darauf hinweisen
+  static String ipWarnedFor;
+  if (edIpFixed && edVal[3] != wifiSsid && ipWarnedFor != edVal[3]) {
+    ipWarnedFor = edVal[3];
+    edTab = 2;
+    edField = 5;
+    toast("Feste IP aktiv – passt sie zum neuen WLAN? Dann nochmal Speichern", C_ACC_ORG, 10000);
+    return;
+  }
+
   bool netChanged = edVal[3] != wifiSsid || edVal[4] != wifiPass || edIpFixed != ipFixed ||
                     (edIpFixed && (edVal[5] != ipAddr || edVal[6] != ipMask || edVal[7] != ipGw ||
                                    edVal[8] != ipDns));
@@ -1522,7 +1947,10 @@ static void saveSettings() {
   ipGw   = edVal[7];
   ipDns  = edVal[8];
   pollMs     = edPoll;
-  winterMode = edWinter;
+  winterSolar  = edWinSol;
+  winterHeater = edWinHeat;
+  rotateVals   = edRotate;
+  stepNames    = edNames;
 
   prefs.begin("pooldisp", false);
   prefs.putString("host", violetHost);
@@ -1536,7 +1964,10 @@ static void saveSettings() {
   prefs.putString("gw", ipGw);
   prefs.putString("dns", ipDns);
   prefs.putUInt("poll", pollMs);
-  prefs.putBool("winter", winterMode);
+  prefs.putBool("winsol", winterSolar);
+  prefs.putBool("winheat", winterHeater);
+  prefs.putBool("rotate", rotateVals);
+  prefs.putBool("bwnames", stepNames);
   prefs.end();
   Serial.printf("Einstellungen gespeichert: Violet %s, WLAN %s, IP %s\n", violetHost.c_str(),
                 wifiSsid.c_str(), ipFixed ? ipAddr.c_str() : "DHCP");
@@ -1550,6 +1981,7 @@ static void saveSettings() {
 
   screen = SCR_OVERVIEW;
   needFull = true;
+  nextCfgFetch = 0;          // Violet-Zugang evtl. geaendert: Relaisnamen neu lesen
   if (WiFi.status() != WL_CONNECTED) connectWifi(15000);
   showMessage("Teste Verbindung zur Violet ...");
   if (pollViolet()) {
@@ -1596,7 +2028,7 @@ static void settingsTap(int x, int y) {
     return;
   }
 
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < NTAB; i++) {
     if (hit(tabRect(i), x, y)) {
       edTab = i;
       edField = i == 0 ? 0 : (i == 1 ? 3 : 5);
@@ -1657,10 +2089,14 @@ static void settingsTap(int x, int y) {
         return;
       }
     }
+  } else if (edTab == 3) {
+    bool* val[4] = { &edRotate, &edNames, &edWinSol, &edWinHeat };
+    for (int row = 0; row < 4; row++) {
+      if (hit(optBtn(row, 0), x, y)) { *val[row] = false; return; }
+      if (hit(optBtn(row, 1), x, y)) { *val[row] = true; return; }
+    }
   } else {
     for (int i = 0; i < 5; i++) if (hit(pollBtn(i), x, y)) { edPoll = POLL_CHOICES[i]; return; }
-    if (hit(R_WIN_OFF, x, y)) { edWinter = false; return; }
-    if (hit(R_WIN_ON, x, y))  { edWinter = true; return; }
     if (hit(R_UPD, x, y)) {
       if (updateVersion.length()) {
         askConfirm(A_OTA, "Update " + updateVersion + " installieren?", "Das Display startet danach neu.");
@@ -1693,6 +2129,7 @@ static void draw() {
     if (screen == SCR_OVERVIEW) drawOverview(true);
     else if (screen == SCR_PUMP) drawPump();
     else if (screen == SCR_HEAT) drawHeat();
+    else if (screen == SCR_SWITCH) drawSwitch();
     else drawSettings();
     drawDialog();
     pushAll();
@@ -1709,11 +2146,11 @@ static void runAction(Action a) {
     case A_PUMP_OFF:    sendCommand("PUMP", "OFF", 0); break;
     case A_PUMP_SPEED:  sendCommand("PUMP", "ON", pendingSpeed); break;
     case A_BW_START:     bwRequest(); break;
-    case A_BW_PUMP_AUTO: bwPumpAutoThenStart(); break;
     case A_SOLAR_ON:    sendCommand("SOLAR", "ON", 0); break;
     case A_SOLAR_AUTO:  sendCommand("SOLAR", "AUTO", 0); break;
     case A_HEATER_ON:   sendCommand("HEATER", "ON", 0); break;
     case A_HEATER_AUTO: sendCommand("HEATER", "AUTO", 0); break;
+    case A_SWITCH:      sendCommand(pendFunc.c_str(), pendAct.c_str(), 0); break;
     case A_OTA:         doOta(); break;
     case A_FACTORY:
       prefs.begin("pooldisp", false);
@@ -1751,18 +2188,26 @@ static void onTap(int x, int y) {
     case SCR_SETTINGS: settingsTap(x, y); return;
     case SCR_PUMP:     pumpTap(x, y); return;
     case SCR_HEAT:     heatTap(x, y); return;
+    case SCR_SWITCH:   switchTap(x, y); return;
     default: break;
   }
 
   if (hit(R_GEAR, x, y)) {
     openSettings(0);
+  } else if (ovPage == 1) {
+    if (hit(tall(1), x, y)) {
+      swPage = 0;
+      screen = SCR_SWITCH;
+    }
   } else if (hit(tileRect(0, 0), x, y)) {
     for (int k = 1; k <= 3; k++) {
       int n = (tempSel + k) % 3;
       if (data.tempOk[n]) { tempSel = n; break; }
     }
+    lastRotate = millis();
   } else if (hit(tileRect(1, 0), x, y)) {
     waterSel = (waterSel + 1) % (data.chlorOk ? 3 : 2);
+    lastRotate = millis();
   } else if (hit(tileRect(0, 1), x, y)) {
     screen = SCR_PUMP;
   } else if (hit(tileRect(1, 1), x, y)) {
@@ -1771,33 +2216,58 @@ static void onTap(int x, int y) {
   needRedraw = true;
 }
 
+// Uebersicht: Ansicht wechseln (dx < 0 = nach links gewischt -> Ansicht 2)
+static void onSwipe(int dx) {
+  int neu = dx < 0 ? 1 : 0;
+  if (neu == ovPage) return;
+  ovPage = neu;
+  lastRotate = millis();
+  needFull = true;
+  needRedraw = true;
+}
+
 static void handleTouch() {
   static bool wasDown = false;
   static uint32_t downSince = 0;
-  static int32_t downY = 0;
+  static int32_t downX = 0, downY = 0, lastX = 0, lastY = 0;
   static bool longDone = false;
+  static bool pendingTap = false;   // Uebersicht: Tipp erst beim Loslassen (Wischen erkennen)
   int32_t tx, ty;
   bool down = disp::getTouch(&tx, &ty);
+  if (down) { lastX = tx; lastY = ty; }
 
   // Kopfzeile der Uebersicht 2 s gedrueckt halten -> Einstellungen
   if (down && wasDown && !longDone && screen == SCR_OVERVIEW && confirmAct == A_NONE && !dimmed &&
-      downY < HEAD && millis() - downSince > 2000) {
+      downY < HEAD && abs((int)(lastX - downX)) < 40 && millis() - downSince > 2000) {
     longDone = true;
+    pendingTap = false;
     lastTouchMs = millis();
     openSettings(0);
   }
 
   if (down && !wasDown) {
     downSince = millis();
+    downX = tx;
     downY = ty;
     longDone = false;
+    pendingTap = false;
     lastTouchMs = millis();
     if (dimmed) {
       dimmed = false;
       disp::setBrightness(BRIGHT_ON);
+    } else if (screen == SCR_OVERVIEW && confirmAct == A_NONE) {
+      pendingTap = true;
     } else {
       onTap(tx, ty);
     }
+  }
+
+  if (!down && wasDown && pendingTap) {
+    pendingTap = false;
+    lastTouchMs = millis();
+    int dx = (int)(lastX - downX), dy = (int)(lastY - downY);
+    if (abs(dx) > 100 && abs(dx) > 2 * abs(dy)) onSwipe(dx);
+    else if (abs(dx) < 40 && abs(dy) < 40) onTap(downX, downY);
   }
   wasDown = down;
 }
@@ -1852,6 +2322,7 @@ void setup() {
   fXL.begin(FONT_XL, sizeof(FONT_XL));
 
   showMessage("Verbinde mit WLAN ...");
+  WiFi.persistent(false);      // Zugangsdaten nur in unseren Einstellungen, nicht zusaetzlich im WLAN-Speicher
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   connectWifi(20000);
@@ -1880,13 +2351,40 @@ void loop() {
   // Abfrage: im eingestellten Intervall, nach einem Befehl einmal sofort.
   // Waehrend der Einstellungen nicht (blockiert sonst die Tastatur).
   bool soon = pollSoonAt && millis() >= pollSoonAt;
-  if (screen != SCR_SETTINGS && (soon || millis() - lastPoll >= pollMs)) {
+  uint32_t interval = bwActive() ? BW_POLL_MS : pollMs;   // Rueckspuelung: alle 2 s
+  if (screen != SCR_SETTINGS && (soon || millis() - lastPoll >= interval)) {
     pollSoonAt = 0;
     lastPoll = millis();
     if (pollViolet()) {
       failCount = 0;
       bwAfterPoll();
     } else failCount++;
+    needRedraw = true;
+  }
+
+  // Relaisnamen usw. aus getConfig: nach dem Start, dann alle 6 h (nicht waehrend der Rueckspuelung)
+  if (screen != SCR_SETTINGS && data.valid && !bwActive() && millis() >= nextCfgFetch) {
+    bool ok = fetchConfig();
+    nextCfgFetch = millis() + (ok ? CFG_REFRESH_MS : 5UL * 60UL * 1000UL);
+    needRedraw = true;
+  }
+
+  // Temperatur / Wasserwerte selbst weiterschalten
+  if (rotateVals && screen == SCR_OVERVIEW && ovPage == 0 && confirmAct == A_NONE &&
+      millis() - lastRotate >= ROTATE_MS) {
+    lastRotate = millis();
+    for (int k = 1; k <= 3; k++) {
+      int n = (tempSel + k) % 3;
+      if (data.tempOk[n]) { tempSel = n; break; }
+    }
+    waterSel = (waterSel + 1) % (data.chlorOk ? 3 : 2);
+    needRedraw = true;
+  }
+
+  // Ansicht 2 nach einer Weile ohne Beruehrung wieder auf Ansicht 1
+  if (screen == SCR_OVERVIEW && ovPage == 1 && confirmAct == A_NONE && millis() - lastTouchMs > PAGE_TIMEOUT_MS) {
+    ovPage = 0;
+    needFull = true;
     needRedraw = true;
   }
 
