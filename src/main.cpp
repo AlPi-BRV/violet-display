@@ -1189,7 +1189,8 @@ static void drawDosTile() {
     useFont(fB);
     text(DOS_NAME[idx[k]], r.x + 16, y + 16, C_TEXT, ML_DATUM);
     useFont(fT);
-    if (!elo) text("heute " + mengeText(d.heute), r.x + r.w - 16, y + 16, C_DIM, MR_DATUM);
+    // Elektrolyse: die Violet liefert "_ML", gemeint sind Gramm (heute) bzw. Stunden (Zelle)
+    text("heute " + (elo ? fmt(d.heute, 0) + " g" : mengeText(d.heute)), r.x + r.w - 16, y + 16, C_DIM, MR_DATUM);
 
     String l2;
     uint16_t c2 = C_DIM;
