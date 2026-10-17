@@ -49,26 +49,31 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 
 | | |
 |---|---|
-| Display | **Elecrow CrowPanel ESP32 5.0"**, SKU **DIS07050H**, Board-Revision **V3.0** – oder – **CrowPanel 7.0"**, SKU **DIS08070H**, Board-Revision **V3.0** (in Erprobung) |
+| Display | **Elecrow CrowPanel ESP32 5.0"**, SKU **DIS07050H**, Board-Revision **V3.0**<br>oder **Elecrow CrowPanel ESP32 7.0"**, SKU **DIS08070H**, Board-Revision **V3.0** (ab 0.3.5) |
 | Chip | ESP32-S3-WROOM-1-N4R8 (4 MB Flash, 8 MB PSRAM) |
 | Auflösung | 800 × 480, kapazitiver Touch |
 
 **Bezugsquelle:** [CrowPanel 5.0" bei Amazon](https://www.amazon.de/dp/B0DL5WB7RQ) ·
-[Elecrow-Wiki zum 5.0"](https://www.elecrow.com/wiki/esp32-display-502727-intelligent-touch-screen-wi-fi26ble-800480-hmi-display.html)
+[Elecrow-Wiki zum 5.0"](https://www.elecrow.com/wiki/esp32-display-502727-intelligent-touch-screen-wi-fi26ble-800480-hmi-display.html) ·
+[CrowPanel 7.0" bei Amazon](https://www.amazon.de/dp/B0CHDYR54Q) ·
+[Elecrow-Wiki zum 7.0"](https://www.elecrow.com/wiki/esp32-display-702727-intelligent-touch-screen-wi-fi26ble-800480-hmi-display.html)
 
+Beide Größen haben dieselbe Oberfläche (800 × 480), brauchen aber **jeweils eigene Firmware**.
 Beim Kauf auf **Board-Revision V3.0** achten – sie steht auf der Rückseite der
-Platine neben dem Flachbandkabel.
-
-**Neu ab 0.3.5:** [CrowPanel 7.0"](https://www.amazon.de/dp/B0CHDYR54Q) (DIS08070H, V3.0) –
-eigene Firmware, gleiche Oberfläche (ebenfalls 800 × 480). Noch in Erprobung.
+Platine neben dem Flachbandkabel, zusammen mit der SKU.
 
 > **Richtige Datei wählen!** Jede Datei trägt die Größe im Namen:
 > `violet-display-5zoll-…` nur für das 5", `violet-display-7zoll-…` nur für das 7".
 > Die SKU steht auf der Rückseite der Platine (DIS07050H = 5", DIS08070H = 7").
 > Updates über WLAN laden automatisch nur die Datei für die eigene Größe.
 
-Getestet ist nur diese Variante. Andere CrowPanel-Größen oder ältere Revisionen
-haben eine andere Pin-Belegung.
+Getestet sind nur diese beiden Varianten. Andere CrowPanel-Größen, die „Advance“-Reihe
+oder ältere Revisionen haben eine andere Pin-Belegung.
+
+| Display | Neu installieren (USB) | Update über WLAN |
+|---|---|---|
+| 5" | `violet-display-5zoll-<version>-full.bin` | `violet-display-5zoll-<version>-ota.bin` |
+| 7" | `violet-display-7zoll-<version>-full.bin` | `violet-display-7zoll-<version>-ota7.bin` |
 
 ## Installation
 
@@ -76,7 +81,8 @@ haben eine andere Pin-Belegung.
 
 1. Display per USB-C anschließen.
 2. **[Web-Installer öffnen](https://alpi-brv.github.io/violet-display/)** in Chrome oder Edge.
-3. *Installieren* klicken, Anschluss wählen – fertig.
+3. Den Knopf für **deine Größe** klicken (*5-Zoll-* oder *7-Zoll-Firmware installieren*),
+   Anschluss wählen – fertig.
 
 ### Selbst bauen (PlatformIO)
 
@@ -166,7 +172,8 @@ Verwendete Bibliotheken: [LovyanGFX](https://github.com/lovyan03/LovyanGFX),
 ## English
 
 Standalone touch display for the **Violet pool controller** by PoolDigital, running
-on an Elecrow CrowPanel ESP32-S3 5" (DIS07050H, V3.0). Reads values directly from the
+on an Elecrow CrowPanel ESP32-S3 5" (DIS07050H, V3.0) or 7" (DIS08070H, V3.0, since 0.3.5).
+Each size needs its own firmware – file names contain `5zoll` or `7zoll`. Reads values directly from the
 Violet over Wi-Fi – no ioBroker or server required.
 
 - Overview: water temperature, water values (pH, ORP, chlorine), filter pump, heaters
