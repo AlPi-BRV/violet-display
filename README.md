@@ -24,11 +24,18 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 
 - **Übersicht mit vier großen Kacheln:** Wassertemperatur, Wasserwerte (Kachel
   grün/gelb/rot), Filterpumpe, Heizungen
-- **Antippen schaltet durch:** Wasser- / Luft- / Absorbertemperatur und pH / Redox / Chlor
-- **Filterpumpe:** EIN / AUS / AUTO, Drehzahl ECO / Normal / Boost, Rückspülung starten
+- **Antippen schaltet durch:** Wasser- / Luft- / Absorbertemperatur und pH / Redox / Chlor,
+  auf Wunsch wechseln die Werte auch alle 5 Sekunden von selbst
+- **Zustände einheitlich:** EIN AUTO / AUS AUTO / EIN (MAN) / AUS (MAN)
+- **Filterpumpe:** EIN / AUS / AUTO, Drehzahl ECO / Normal / Boost
+- **Rückspülung starten:** nur wenn die Pumpe auf AUTO steht; zeigt „Schritt X/6“
+  (optional mit Namen) und stellt die Rückspülautomatik danach wieder wie vorher
 - **Heizungen:** Absorber und Heizung EIN / AUS / AUTO – EIN und AUTO mit Sicherheitsabfrage
-- **Winterbetrieb:** sperrt die Bedienung der Heizungen, z. B. wenn die Anlage
-  entleert ist und Kugelhähne geschlossen sind
+- **Winterbetrieb getrennt für Absorber und Heizung:** sperrt die Bedienung, z. B. wenn
+  der Absorber entleert ist, die Heizung aber weiter genutzt wird
+- **Zweite Ansicht (nach links wischen):** Dosierung (heute dosiert, Kanister-Rest,
+  Reichweite, Sperrgründe) sowie Licht und Relaiserweiterung mit Namen aus der Violet –
+  Relais EIN / AUTO, Relais der Abdeckung werden nicht angeboten
 - **Einrichtung komplett am Display:** WLAN suchen, feste IP oder DHCP, IP der Violet,
   Benutzer und Passwort mit *Login testen* – Bildschirmtastatur mit Umlauten
 - **Abfrageintervall** wählbar (15 s bis 5 min)
@@ -102,7 +109,8 @@ Später öffnet das **Zahnrad** neben „Pool“ die Einstellungen
 | Violet | IP der Violet, Benutzer, Passwort, *Login testen* |
 | WLAN | Netz suchen und wählen, WLAN-Passwort |
 | IP | Automatisch (DHCP) oder feste IP mit Subnetz, Gateway, DNS |
-| System | Abfrageintervall, Winterbetrieb, Update, Werkseinstellungen |
+| Anzeige | Werte wechseln, Schrittnamen der Rückspülung, Winterbetrieb Absorber / Heizung |
+| System | Abfrageintervall, Update, Werkseinstellungen |
 
 Benutzer und Passwort sind nur für Schaltbefehle nötig; das Lesen der Werte
 funktioniert bei der Violet ohne Anmeldung. Änderungen an WLAN oder IP starten
@@ -156,7 +164,8 @@ Violet over Wi-Fi – no ioBroker or server required.
 
 - Overview: water temperature, water values (pH, ORP, chlorine), filter pump, heaters
 - Control: filter pump ON / OFF / AUTO with speed, manual backwash, solar and heater
-  ON / OFF / AUTO (with confirmation), winter mode locks the heaters
+  ON / OFF / AUTO (with confirmation), winter mode per heater
+- Second page (swipe left): dosing (today, canister, range) and light / relay extension
 - Setup entirely on the device: Wi-Fi scan, static IP or DHCP, Violet IP, user and
   password with login test, polling interval, factory reset (gear icon)
 - Over-the-air updates from GitHub releases

@@ -25,7 +25,7 @@
 #include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.3.3"
+#define FW_VERSION  "0.3.4"
 #define GITHUB_REPO "AlPi-BRV/violet-display"
 #define UPDATE_CHECK_EVERY_MS (24UL * 60UL * 60UL * 1000UL)
 #define UPDATE_FIRST_CHECK_MS (60UL * 1000UL)
@@ -331,6 +331,11 @@ static String statusText(int s) {
     default: return "--";
   }
 }
+
+// Winterbetrieb: statt AUS AUTO / AUS (MAN) nur "Winterbetrieb" zeigen.
+// Laeuft das Geraet trotzdem (z. B. Frostschutz der Violet), bleibt der echte Status sichtbar.
+static String heatStatus(int s, bool winter) { return (winter && !istAn(s)) ? String("Winterbetrieb") : statusText(s); }
+static uint16_t heatColor(int s, bool winter) { return istAn(s) ? C_ACC_GRN : (winter ? C_ACC_BLUE : C_TEXT); }
 
 static String mengeText(float ml) {
   if (isnan(ml)) return "--";
@@ -1142,11 +1147,11 @@ static void drawHeatTile() {
   drawChevron(r.x + r.w - 30, r.y + 26, C_ACC_ORG);
   const int y1 = r.y + r.h / 2 - 14, y2 = r.y + r.h / 2 + 46;
   useFont(fT);
-  text(winterSolar ? "Absorber · Winter" : "Absorber", r.x + 16, y1, C_ACC_ORG, ML_DATUM);
-  text(winterHeater ? "Heizung · Winter" : "Heizung", r.x + 16, y2, C_ACC_ORG, ML_DATUM);
+  text("Absorber", r.x + 16, y1, C_ACC_ORG, ML_DATUM);
+  text("Heizung", r.x + 16, y2, C_ACC_ORG, ML_DATUM);
   useFont(fB);
-  text(statusText(data.solar), r.x + r.w - 16, y1, istAn(data.solar) ? C_ACC_GRN : C_TEXT, MR_DATUM);
-  text(statusText(data.heater), r.x + r.w - 16, y2, istAn(data.heater) ? C_ACC_GRN : C_TEXT, MR_DATUM);
+  text(heatStatus(data.solar, winterSolar), r.x + r.w - 16, y1, heatColor(data.solar, winterSolar), MR_DATUM);
+  text(heatStatus(data.heater, winterHeater), r.x + r.w - 16, y2, heatColor(data.heater, winterHeater), MR_DATUM);
 }
 
 // ---------------------------------------------------------------
@@ -1417,7 +1422,7 @@ static void drawHeat() {
     useFont(fB);
     text(names[row], M + 4, b0.y - 12, C_ACC_ORG, BL_DATUM);
     useFont(fT);
-    text("Status: " + statusText(st[row]), 800 - M - 4, b0.y - 12, istAn(st[row]) ? C_ACC_GRN : C_TEXT,
+    text("Status: " + heatStatus(st[row], lock[row]), 800 - M - 4, b0.y - 12, heatColor(st[row], lock[row]),
          BR_DATUM);
     if (lock[row]) {
       const String hint = "Gesperrt – Winterbetrieb (Einstellungen > Anzeige)";
@@ -1501,7 +1506,7 @@ static void drawSwitch() {
     text(statusText(st), M + 4, b0.y + 50, istAn(st) ? C_ACC_GRN : C_DIM, ML_DATUM);
     Mode md = modeOf(st);
     button(swBtn(row, 0), "EIN",  md == M_ON);
-    button(swBtn(row, 1), "AUS",  md == M_OFF);
+    if (it[i] < 0) button(swBtn(row, 1), "AUS", md == M_OFF);   // nur Licht hat AUS
     button(swBtn(row, 2), "AUTO", md == M_AUTO);
   }
 }
@@ -1524,6 +1529,7 @@ static void switchTap(int x, int y) {
     int i = swPage * SW_ROWS + row;
     if (i >= n) break;
     for (int col = 0; col < 3; col++) {
+      if (col == 1 && it[i] >= 0) continue;              // Relais: keine AUS-Taste (AUTO = aus mit Schaltregeln)
       if (!hit(swBtn(row, col), x, y)) continue;
       const char* act = col == 0 ? "ON" : (col == 1 ? "OFF" : "AUTO");
       if (it[i] < 0 || col == 2) {
@@ -1531,8 +1537,7 @@ static void switchTap(int x, int y) {
       } else {
         pendFunc = itemFunc(it[i]);
         pendAct = act;
-        askConfirm(A_SWITCH, itemName(it[i]) + " wirklich",
-                   col == 0 ? "manuell EINschalten?" : "manuell AUSschalten?");
+        askConfirm(A_SWITCH, itemName(it[i]) + " wirklich", "manuell EINschalten?");
       }
       return;
     }
