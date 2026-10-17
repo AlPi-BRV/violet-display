@@ -44,7 +44,7 @@ jobs:
             tail -n 10 build.log | while read -r l; do echo "::warning::${l:0:400}"; done
             exit 1
           fi
-          grep -E "^(RAM|Flash):|Environment|crowpanel" build.log | grep -E "RAM|Flash|SUCCESS"  | while read -r l; do echo "::notice::$l"; done
+          grep -E "^(RAM|Flash):" build.log | while read -r l; do echo "::notice::$l"; done
 
       - name: Version pruefen
         run: |
