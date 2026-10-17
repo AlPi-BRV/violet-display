@@ -1,6 +1,9 @@
 #pragma once
 // ---------------------------------------------------------------
-// Display-Unterbau fuer das Elecrow CrowPanel 5" (DIS07050H, V3.0)
+// Display-Unterbau fuer die Elecrow CrowPanels (beide 800 x 480, ESP32-S3 N4R8)
+//   - 5,0" DIS07050H, V3.0  (Standard)
+//   - 7,0" DIS08070H, V3.0  (Build-Flag -DBOARD_CROWPANEL7)
+//  Unterschiede: Belegung der RGB-Datenleitungen, DE/VSYNC vertauscht, Timing.
 //
 //  - RGB-Panel ueber den Espressif-Treiber (esp_lcd) mit Bounce-Buffer:
 //    Das Bild liegt im PSRAM, die Ausgabe ans Panel laeuft aber ueber zwei
@@ -8,7 +11,8 @@
 //    (WLAN, Rechnen, Flash schreiben) fuehren so nicht mehr zum Zucken.
 //  - Gezeichnet wird in ein unsichtbares Zwischenbild (LovyanGFX-Sprite);
 //    geaenderte Bereiche werden ins Panel kopiert.
-//  - Touch GT911 direkt ueber I2C, Reset ueber den PCA9557 (Board V3.0).
+//  - Touch GT911 direkt ueber I2C (SDA 19 / SCL 20, bei beiden gleich),
+//    Reset ueber den PCA9557 (Board V3.0).
 // ---------------------------------------------------------------
 #include <Arduino.h>
 #include <Wire.h>
@@ -20,9 +24,28 @@ namespace disp {
 static const int W = 800;
 static const int H = 480;
 
-// Timing wie in der bisherigen, funktionierenden Einstellung (Elecrow-Werte)
+// ------------------------- Board-Unterschiede -------------------------
+#if defined(BOARD_CROWPANEL7)
+// 7,0" (DIS08070H, V3.0) – Werte aus Elecrows LovyanGFX-Einstellung fuer das 7"
+#ifndef LCD_PCLK_HZ
+#define LCD_PCLK_HZ 15000000      // Elecrow nutzt 12–24 MHz; bei Zucken senken
+#endif
+static const int HS_PULSE = 48, HS_BP = 40, HS_FP = 40;
+static const int VS_PULSE = 31, VS_BP = 13, VS_FP = 1;
+static const int PCLK_NEG = 1;                 // Daten bei fallender Flanke
+static const int PIN_HSYNC = 39, PIN_VSYNC = 40, PIN_DE = 41, PIN_PCLK = 0;
+// D0..D4 = Blau, D5..D10 = Gruen, D11..D15 = Rot
+static const int DATA_PINS[16] = { 15, 7, 6, 5, 4, 9, 46, 3, 8, 16, 1, 14, 21, 47, 48, 45 };
+#else
+// 5,0" (DIS07050H, V3.0) – bisherige, funktionierende Einstellung
 #ifndef LCD_PCLK_HZ
 #define LCD_PCLK_HZ 15000000
+#endif
+static const int HS_PULSE = 4, HS_BP = 43, HS_FP = 8;
+static const int VS_PULSE = 4, VS_BP = 12, VS_FP = 8;
+static const int PCLK_NEG = 0;
+static const int PIN_HSYNC = 39, PIN_VSYNC = 41, PIN_DE = 40, PIN_PCLK = 0;
+static const int DATA_PINS[16] = { 8, 3, 46, 9, 1, 5, 6, 7, 15, 16, 4, 45, 48, 47, 21, 14 };
 #endif
 #ifndef LCD_BOUNCE_LINES
 #define LCD_BOUNCE_LINES 10
@@ -37,31 +60,29 @@ static bool begin() {
   cfg.timings.pclk_hz = LCD_PCLK_HZ;
   cfg.timings.h_res = W;
   cfg.timings.v_res = H;
-  cfg.timings.hsync_pulse_width = 4;
-  cfg.timings.hsync_back_porch = 43;
-  cfg.timings.hsync_front_porch = 8;
-  cfg.timings.vsync_pulse_width = 4;
-  cfg.timings.vsync_back_porch = 12;
-  cfg.timings.vsync_front_porch = 8;
+  cfg.timings.hsync_pulse_width = HS_PULSE;
+  cfg.timings.hsync_back_porch = HS_BP;
+  cfg.timings.hsync_front_porch = HS_FP;
+  cfg.timings.vsync_pulse_width = VS_PULSE;
+  cfg.timings.vsync_back_porch = VS_BP;
+  cfg.timings.vsync_front_porch = VS_FP;
   // entspricht den bisherigen Registerwerten (Sync-Leitungen im Ruhezustand LOW)
   cfg.timings.flags.hsync_idle_low = 1;
   cfg.timings.flags.vsync_idle_low = 1;
   cfg.timings.flags.de_idle_high = 0;
-  cfg.timings.flags.pclk_active_neg = 0;
+  cfg.timings.flags.pclk_active_neg = PCLK_NEG;
   cfg.timings.flags.pclk_idle_high = 0;
   cfg.data_width = 16;
   cfg.bits_per_pixel = 16;
   cfg.num_fbs = 1;
   cfg.bounce_buffer_size_px = W * LCD_BOUNCE_LINES;
   cfg.dma_burst_size = 64;
-  cfg.hsync_gpio_num = 39;
-  cfg.vsync_gpio_num = 41;
-  cfg.de_gpio_num = 40;
-  cfg.pclk_gpio_num = 0;
+  cfg.hsync_gpio_num = PIN_HSYNC;
+  cfg.vsync_gpio_num = PIN_VSYNC;
+  cfg.de_gpio_num = PIN_DE;
+  cfg.pclk_gpio_num = PIN_PCLK;
   cfg.disp_gpio_num = -1;
-  // D0..D4 = Blau, D5..D10 = Gruen, D11..D15 = Rot
-  const int pins[16] = { 8, 3, 46, 9, 1, 5, 6, 7, 15, 16, 4, 45, 48, 47, 21, 14 };
-  for (int i = 0; i < 16; i++) cfg.data_gpio_nums[i] = pins[i];
+  for (int i = 0; i < 16; i++) cfg.data_gpio_nums[i] = DATA_PINS[i];
   cfg.flags.fb_in_psram = 1;
 
   esp_err_t err = esp_lcd_new_rgb_panel(&cfg, &panel);
@@ -168,6 +189,10 @@ static bool getTouch(int32_t* x, int32_t* y) {
       lastY = p[2] | (p[3] << 8);
       if (lastX >= W) lastX = W - 1;
       if (lastY >= H) lastY = H - 1;
+#ifdef TOUCH_ROTATE_180
+      lastX = W - 1 - lastX;   // manche Panels melden den Touch um 180° gedreht
+      lastY = H - 1 - lastY;
+#endif
       down = true;
     }
   }

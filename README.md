@@ -49,7 +49,7 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 
 | | |
 |---|---|
-| Display | **Elecrow CrowPanel ESP32 5.0"**, SKU **DIS07050H**, Board-Revision **V3.0** |
+| Display | **Elecrow CrowPanel ESP32 5.0"**, SKU **DIS07050H**, Board-Revision **V3.0** – oder – **CrowPanel 7.0"**, SKU **DIS08070H**, Board-Revision **V3.0** (in Erprobung) |
 | Chip | ESP32-S3-WROOM-1-N4R8 (4 MB Flash, 8 MB PSRAM) |
 | Auflösung | 800 × 480, kapazitiver Touch |
 
@@ -59,8 +59,13 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 Beim Kauf auf **Board-Revision V3.0** achten – sie steht auf der Rückseite der
 Platine neben dem Flachbandkabel.
 
-**Geplant:** Unterstützung für das [CrowPanel 7.0"](https://www.amazon.de/dp/B0CHDYR54Q) (DIS08070H) –
-noch nicht lauffähig, bitte vorerst das 5"-Modell verwenden.
+**Neu ab 0.3.5:** [CrowPanel 7.0"](https://www.amazon.de/dp/B0CHDYR54Q) (DIS08070H, V3.0) –
+eigene Firmware, gleiche Oberfläche (ebenfalls 800 × 480). Noch in Erprobung.
+
+> **Richtige Datei wählen!** Jede Datei trägt die Größe im Namen:
+> `violet-display-5zoll-…` nur für das 5", `violet-display-7zoll-…` nur für das 7".
+> Die SKU steht auf der Rückseite der Platine (DIS07050H = 5", DIS08070H = 7").
+> Updates über WLAN laden automatisch nur die Datei für die eigene Größe.
 
 Getestet ist nur diese Variante. Andere CrowPanel-Größen oder ältere Revisionen
 haben eine andere Pin-Belegung.
@@ -76,7 +81,9 @@ haben eine andere Pin-Belegung.
 ### Selbst bauen (PlatformIO)
 
 1. Repository klonen und den Ordner in VS Code mit der PlatformIO-Erweiterung öffnen.
-2. Unten in der Statusleiste auf *Upload* (Pfeil) klicken.
+   Unter Windows einen Pfad **ohne Leerzeichen** verwenden (z. B. `C:\pio\violet-display`).
+2. Unten in der Statusleiste die Umgebung wählen: **`env:crowpanel5`** (5") oder **`env:crowpanel7`** (7").
+3. Auf *Upload* (Pfeil) klicken.
 
 Grundlage ist Arduino-ESP32 3.x über [pioarduino](https://github.com/pioarduino/platform-espressif32).
 Der **erste Build dauert lange** (rund 20–30 Minuten, mehrere GB Download), weil die

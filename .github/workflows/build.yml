@@ -30,7 +30,7 @@ jobs:
           path: |
             ~/.platformio
             .pio/libdeps
-          key: pio-${{ hashFiles('platformio.ini') }}
+          key: pio2-${{ hashFiles('platformio.ini') }}
 
       - name: PlatformIO installieren
         run: pip install platformio "esptool==4.8.1"
@@ -38,13 +38,13 @@ jobs:
       - name: Firmware bauen
         run: |
           set -o pipefail
-          if ! pio run 2>&1 | tee build.log; then
+          if ! pio run -e crowpanel5 -e crowpanel7 2>&1 | tee build.log; then
             # Compilerfehler als Hinweise am Lauf sichtbar machen
             grep -iE "error|fail|\*\*\*|not found|no such" build.log | grep -v "^Compiling" | tail -10 | while read -r l; do echo "::error::${l:0:400}"; done
             tail -n 10 build.log | while read -r l; do echo "::warning::${l:0:400}"; done
             exit 1
           fi
-          grep -E "^(RAM|Flash):" build.log | while read -r l; do echo "::notice::$l"; done
+          grep -E "^(RAM|Flash):|Environment|crowpanel" build.log | grep -E "RAM|Flash|SUCCESS"  | while read -r l; do echo "::notice::$l"; done
 
       - name: Version pruefen
         run: |
@@ -58,30 +58,48 @@ jobs:
 
       - name: Dateien zusammenstellen
         run: |
-          B=.pio/build/crowpanel5
+          # Jede Datei traegt die Displaygroesse im Namen (5zoll / 7zoll).
+          #  5": ...-5zoll-<ver>-ota.bin  – endet wie bisher auf -ota.bin, damit
+          #      Displays mit 0.3.1–0.3.4 ihr Update weiter finden
+          #  7": ...-7zoll-<ver>-ota7.bin – endet bewusst NICHT auf -ota.bin,
+          #      aeltere 5"-Firmware kann sie so nie laden
           BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -n 1)
-          mkdir -p site/firmware
-          python -m esptool --chip esp32s3 merge_bin \
-            -o site/firmware/violet-display-full.bin \
-            --flash_mode keep --flash_freq keep --flash_size keep \
-            0x0 $B/bootloader.bin \
-            0x8000 $B/partitions.bin \
-            0xe000 "$BOOT_APP0" \
-            0x10000 $B/firmware.bin
-          cp $B/firmware.bin site/firmware/violet-display-ota.bin
+          mkdir -p site/firmware release
+          for SIZE in 5 7; do
+            B=.pio/build/crowpanel$SIZE
+            N=violet-display-${SIZE}zoll
+            python -m esptool --chip esp32s3 merge_bin \
+              -o site/firmware/$N-full.bin \
+              --flash_mode keep --flash_freq keep --flash_size keep \
+              0x0 $B/bootloader.bin \
+              0x8000 $B/partitions.bin \
+              0xe000 "$BOOT_APP0" \
+              0x10000 $B/firmware.bin
+            if [ "$SIZE" = 5 ]; then OTA=ota; else OTA=ota7; fi
+            cp $B/firmware.bin site/firmware/$N-$OTA.bin
+            cp site/firmware/$N-full.bin  release/$N-$VERSION-full.bin
+            cp site/firmware/$N-$OTA.bin  release/$N-$VERSION-$OTA.bin
+            sed -e "s/__VERSION__/$VERSION/" -e "s/__SIZE__/$SIZE/g" docs/manifest.json > site/manifest-${SIZE}zoll.json
+          done
+          # alter Link auf manifest.json zeigt weiter auf das 5"
+          cp site/manifest-5zoll.json site/manifest.json
           cp docs/index.html site/
-          sed "s/__VERSION__/$VERSION/" docs/manifest.json > site/manifest.json
-          cp site/firmware/violet-display-full.bin "violet-display-$VERSION-full.bin"
-          # ab 0.3.0 heisst die Update-Datei "-ota.bin" (0.2.x sucht "-app.bin" und
-          # spielt die neue Grundlage so nicht versehentlich ueber WLAN ein)
-          cp site/firmware/violet-display-ota.bin  "violet-display-$VERSION-ota.bin"
+          ls -l release
 
-      - name: Testdateien bereitstellen (Entwicklungszweig)
+      - name: Testdateien 5 Zoll (Entwicklungszweig)
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
-          name: violet-display-${{ env.VERSION }}-test
-          path: site/firmware/
+          name: violet-display-5zoll-${{ env.VERSION }}-test
+          path: release/violet-display-5zoll-*
+          retention-days: 14
+
+      - name: Testdateien 7 Zoll (Entwicklungszweig)
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: violet-display-7zoll-${{ env.VERSION }}-test
+          path: release/violet-display-7zoll-*
           retention-days: 14
 
       - name: Release anlegen
@@ -89,9 +107,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: Violet Pool-Display ${{ env.VERSION }}
-          files: |
-            violet-display-${{ env.VERSION }}-full.bin
-            violet-display-${{ env.VERSION }}-ota.bin
+          files: release/*.bin
 
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name != 'push'

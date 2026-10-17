@@ -21,23 +21,49 @@
     .hint { color: var(--muted); font-size: 14px; }
     esp-web-install-button { display: block; margin: 8px 0 4px; }
     a { color: var(--accent); }
+    .warn { background: rgba(214,140,0,.14); border-left: 4px solid #d68c00; padding: 10px 14px; border-radius: 6px; }
+    .boards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 12px; }
+    .board { border: 1px solid rgba(127,127,127,.3); border-radius: 10px; padding: 14px 16px; }
+    .size { font-size: 34px; font-weight: 700; line-height: 1.1; }
+    .sku { color: var(--muted); font-size: 14px; margin-bottom: 8px; }
+    .inst { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 10px 14px;
+            font: inherit; font-weight: 600; cursor: pointer; width: 100%; }
     code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; }
   </style>
 </head>
 <body>
 <main>
   <h1>Violet Pool-Display</h1>
-  <p class="sub">Firmware für das Elecrow CrowPanel 5" (DIS07050H) – direkt im Browser flashen</p>
+  <p class="sub">Firmware für die Elecrow CrowPanels 5" und 7" – direkt im Browser flashen</p>
 
   <div class="card">
     <ol>
       <li>Display per USB-C mit dem Rechner verbinden.</li>
       <li>Diese Seite in <strong>Chrome</strong> oder <strong>Edge</strong> öffnen (Firefox und Safari können kein USB).</li>
       <li>Auf <em>Installieren</em> klicken und den Anschluss des Displays wählen.</li>
+      <li>Unten den Knopf für <strong>deine Displaygröße</strong> wählen, Anschluss auswählen.</li>
     </ol>
-    <esp-web-install-button manifest="manifest.json">
-      <span slot="unsupported">Dieser Browser kann nicht flashen – bitte Chrome oder Edge verwenden.</span>
-    </esp-web-install-button>
+    <p class="warn">Die Größe steht auf der Rückseite der Platine: <strong>SKU DIS07050H = 5"</strong>,
+    <strong>SKU DIS08070H = 7"</strong>. Die Firmware des einen läuft nicht auf dem anderen
+    (Bild bleibt schwarz oder gestört – dann einfach mit der richtigen neu flashen).</p>
+    <div class="boards">
+      <div class="board">
+        <div class="size">5"</div>
+        <div class="sku">CrowPanel 5,0" · DIS07050H · V3.0</div>
+        <esp-web-install-button manifest="manifest-5zoll.json">
+          <button slot="activate" class="inst">5-Zoll-Firmware installieren</button>
+          <span slot="unsupported">Dieser Browser kann nicht flashen – bitte Chrome oder Edge verwenden.</span>
+        </esp-web-install-button>
+      </div>
+      <div class="board">
+        <div class="size">7"</div>
+        <div class="sku">CrowPanel 7,0" · DIS08070H · V3.0</div>
+        <esp-web-install-button manifest="manifest-7zoll.json">
+          <button slot="activate" class="inst">7-Zoll-Firmware installieren</button>
+          <span slot="unsupported">Dieser Browser kann nicht flashen – bitte Chrome oder Edge verwenden.</span>
+        </esp-web-install-button>
+      </div>
+    </div>
     <p class="hint">Startet die Verbindung nicht: am Display <code>BOOT</code> gedrückt halten, kurz <code>RESET</code> drücken, <code>BOOT</code> loslassen.</p>
   </div>
 

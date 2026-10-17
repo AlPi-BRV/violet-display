@@ -1,4 +1,4 @@
-// Violet Pool-Display – Elecrow CrowPanel 5" (DIS07050H, V3.0)
+// Violet Pool-Display – Elecrow CrowPanel 5" (DIS07050H) und 7" (DIS08070H), jeweils V3.0
 //
 // Liest getReadings direkt von der Violet-Poolsteuerung.
 // Ansicht 1: Wassertemperatur, Wasserwerte, Filterpumpe, Heizungen.
@@ -25,7 +25,24 @@
 #include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.3.4"
+#define FW_VERSION  "0.3.5"
+
+// Board-Kennung: steckt in jedem Dateinamen des Releases. Die Update-Suche
+// nimmt NUR Dateien mit der eigenen Kennung, damit ein 5" nie die 7"-Firmware
+// laedt und umgekehrt.
+//  5": violet-display-5zoll-<ver>-ota.bin   (endet wie bisher auf -ota.bin,
+//      so finden auch Displays mit 0.3.1–0.3.4 ihr Update)
+//  7": violet-display-7zoll-<ver>-ota7.bin  (endet bewusst NICHT auf -ota.bin,
+//      aeltere 5"-Firmware ignoriert sie dadurch)
+#if defined(BOARD_CROWPANEL7)
+#define BOARD_NAME   "7 Zoll"
+#define OTA_PREFIX   "violet-display-7zoll-"
+#define OTA_SUFFIX   "-ota7.bin"
+#else
+#define BOARD_NAME   "5 Zoll"
+#define OTA_PREFIX   "violet-display-5zoll-"
+#define OTA_SUFFIX   "-ota.bin"
+#endif
 #define GITHUB_REPO "AlPi-BRV/violet-display"
 #define UPDATE_CHECK_EVERY_MS (24UL * 60UL * 60UL * 1000UL)
 #define UPDATE_FIRST_CHECK_MS (60UL * 1000UL)
@@ -800,7 +817,7 @@ static bool checkForUpdate() {
   String url;
   for (JsonObject a : doc["assets"].as<JsonArray>()) {
     String name = a["name"] | "";
-    if (name.endsWith("-ota.bin")) url = a["browser_download_url"] | "";
+    if (name.startsWith(OTA_PREFIX) && name.endsWith(OTA_SUFFIX)) url = a["browser_download_url"] | "";
   }
   Serial.printf("Update-Pruefung: installiert %s, aktuell %s\n", FW_VERSION, tag.c_str());
   String neu = (tag.length() && versionNum(tag) > versionNum(FW_VERSION)) ? tag : "";
@@ -1874,7 +1891,10 @@ static void drawSettingsBody() {
     for (int i = 0; i < 5; i++) button(pollBtn(i), POLL_LABEL[i], edPoll == POLL_CHOICES[i]);
 
     useFont(fT);
-    text("Firmware " FW_VERSION, M + 6, R_UPD.y + 30, C_TEXT, ML_DATUM);
+    text("Firmware " FW_VERSION, M + 6, R_UPD.y + 16, C_TEXT, ML_DATUM);
+    useFont(fS);
+    text("CrowPanel " BOARD_NAME, M + 6, R_UPD.y + 46, C_DIM, ML_DATUM);
+    useFont(fT);
     if (updateVersion.length())
       button(R_UPD, "Update " + updateVersion + " installieren", false, C_BTN_SEL, C_ACC_GRN);
     else
@@ -2304,7 +2324,7 @@ static bool connectWifi(uint32_t timeoutMs) {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.println("Violet Pool-Display " FW_VERSION " startet");
+  Serial.println("Violet Pool-Display " FW_VERSION " (" BOARD_NAME ") startet");
 
   loadSettings();
   bwLoad();
