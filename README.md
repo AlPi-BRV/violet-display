@@ -123,7 +123,7 @@ Später öffnet das **Zahnrad** neben „Pool“ die Einstellungen
 | WLAN | Netz suchen und wählen, WLAN-Passwort |
 | IP | Automatisch (DHCP) oder feste IP mit Subnetz, Gateway, DNS |
 | Anzeige | Werte wechseln, Schrittnamen der Rückspülung, Winterbetrieb Absorber / Heizung |
-| System | Abfrageintervall, Update, Werkseinstellungen |
+| System | Abfrageintervall, Update, Helligkeit (20–100 %), Werkseinstellungen |
 
 Benutzer und Passwort sind nur für Schaltbefehle nötig; das Lesen der Werte
 funktioniert bei der Violet ohne Anmeldung. Änderungen an WLAN oder IP starten

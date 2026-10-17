@@ -25,7 +25,7 @@
 #include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.3.5"
+#define FW_VERSION  "0.3.6"
 
 // Board-Kennung: steckt in jedem Dateinamen des Releases. Die Update-Suche
 // nimmt NUR Dateien mit der eigenen Kennung, damit ein 5" nie die 7"-Firmware
@@ -77,8 +77,14 @@
 #ifndef DIM_AFTER_MS
 #define DIM_AFTER_MS   (5UL * 60UL * 1000UL)
 #endif
-#ifndef BRIGHT_ON
-#define BRIGHT_ON      255
+// Standard-Helligkeit in Prozent (in Einstellungen > System einstellbar).
+// Das 7" ist bei gleicher Einstellung deutlich heller als das 5".
+#ifndef BRIGHT_DEFAULT_PCT
+#if defined(BOARD_CROWPANEL7)
+#define BRIGHT_DEFAULT_PCT 60
+#else
+#define BRIGHT_DEFAULT_PCT 100
+#endif
 #endif
 #ifndef BRIGHT_DIM
 #define BRIGHT_DIM     30
@@ -159,10 +165,16 @@ static bool     winterSolar  = false;   // Winterbetrieb: Absorber gesperrt
 static bool     winterHeater = false;   // Winterbetrieb: Heizung gesperrt
 static bool     rotateVals   = false;   // Temperatur / Wasserwerte alle 5 s wechseln
 static bool     stepNames    = true;    // Rueckspuelung: Schritt 4 = Rueckspuelen, 5 = Nachspuelen
+static uint8_t  brightPct    = BRIGHT_DEFAULT_PCT;   // Helligkeit in Prozent
 static String   fwUpdatedFrom;   // gesetzt, wenn seit dem letzten Start aktualisiert wurde
 
 static const uint32_t POLL_CHOICES[] = { 15000, 30000, 60000, 120000, 300000 };
 static const char* const POLL_LABEL[] = { "15 s", "30 s", "1 min", "2 min", "5 min" };
+static const uint8_t BRIGHT_CHOICES[] = { 20, 40, 60, 80, 100 };
+
+// Prozent -> PWM-Wert (0..255); gedimmt nie heller als die eingestellte Helligkeit
+static uint8_t brightDuty(uint8_t pct) { return (uint8_t)((uint16_t)pct * 255 / 100); }
+static uint8_t dimDuty() { uint8_t d = brightDuty(brightPct); return d < BRIGHT_DIM ? d : BRIGHT_DIM; }
 
 static void loadSettings() {
   prefs.begin("pooldisp", true);
@@ -185,6 +197,8 @@ static void loadSettings() {
   }
   rotateVals = prefs.getBool("rotate", false);
   stepNames  = prefs.getBool("bwnames", true);
+  brightPct  = prefs.getUChar("bright", BRIGHT_DEFAULT_PCT);
+  if (brightPct < 10 || brightPct > 100) brightPct = BRIGHT_DEFAULT_PCT;
   prefs.end();
 
   // Nach einem Update einmal Bescheid geben
@@ -1574,6 +1588,7 @@ static bool     edShowPass = false;
 static bool     edIpFixed = false;
 static uint32_t edPoll = 30000;
 static bool     edWinSol = false, edWinHeat = false, edRotate = false, edNames = true;
+static uint8_t  edBright = BRIGHT_DEFAULT_PCT;
 enum KbLayer { KB_LOWER, KB_UPPER, KB_SYM };
 static KbLayer  kbLayer = KB_LOWER;
 
@@ -1622,7 +1637,8 @@ static Rect padKey(int i) { return { PAD_X + (i % 3) * (PAD_W + 8), PAD_Y + (i /
 // Reiter System
 static Rect pollBtn(int i) { return { 250 + i * 108, HEAD + 22, 100, 60 }; }
 static const Rect R_UPD     = { 250, HEAD + 112, 540, 60 };
-static const Rect R_FACT    = { 250, HEAD + 202, 300, 60 };
+static const Rect R_FACT    = { 250, HEAD + 292, 300, 60 };
+static Rect brightBtn(int i) { return { 250 + i * 108, HEAD + 202, 100, 60 }; }
 
 // Reiter Anzeige: Zeile 0 Werte-Wechsel, 1 Schrittnamen, 2 Winter Absorber, 3 Winter Heizung
 static Rect optBtn(int row, int col) { return { 250 + col * 150, HEAD + 22 + row * 92, 140, 60 }; }
@@ -1696,6 +1712,7 @@ static void openSettings(int tab) {
   edWinHeat = winterHeater;
   edRotate = rotateVals;
   edNames = stepNames;
+  edBright = brightPct;
   edTab = tab;
   edField = tab == 0 ? 0 : (tab == 1 ? 3 : 5);
   edShowPass = false;
@@ -1901,6 +1918,10 @@ static void drawSettingsBody() {
       button(R_UPD, "Nach Update suchen", false);
 
     useFont(fT);
+    text("Helligkeit", M + 6, brightBtn(0).y + 30, C_TEXT, ML_DATUM);
+    for (int i = 0; i < 5; i++) button(brightBtn(i), String(BRIGHT_CHOICES[i]) + " %", edBright == BRIGHT_CHOICES[i]);
+
+    useFont(fT);
     text("Zurücksetzen", M + 6, R_FACT.y + 30, C_TEXT, ML_DATUM);
     button(R_FACT, "Werkseinstellungen", false, C_BTN_RED);
 
@@ -1977,6 +1998,7 @@ static void saveSettings() {
   winterHeater = edWinHeat;
   rotateVals   = edRotate;
   stepNames    = edNames;
+  brightPct    = edBright;
 
   prefs.begin("pooldisp", false);
   prefs.putString("host", violetHost);
@@ -1994,6 +2016,7 @@ static void saveSettings() {
   prefs.putBool("winheat", winterHeater);
   prefs.putBool("rotate", rotateVals);
   prefs.putBool("bwnames", stepNames);
+  prefs.putUChar("bright", brightPct);
   prefs.end();
   Serial.printf("Einstellungen gespeichert: Violet %s, WLAN %s, IP %s\n", violetHost.c_str(),
                 wifiSsid.c_str(), ipFixed ? ipAddr.c_str() : "DHCP");
@@ -2061,7 +2084,10 @@ static void settingsTap(int x, int y) {
       return;
     }
   }
-  if (hit(R_CANCEL, x, y)) { screen = SCR_OVERVIEW; needFull = true; return; }
+  if (hit(R_CANCEL, x, y)) {
+    disp::setBrightness(brightDuty(brightPct));   // Vorschau verwerfen
+    screen = SCR_OVERVIEW; needFull = true; return;
+  }
   if (hit(R_SAVE, x, y))   { saveSettings(); return; }
 
   if (edTab == 0 || edTab == 1) {
@@ -2123,6 +2149,12 @@ static void settingsTap(int x, int y) {
     }
   } else {
     for (int i = 0; i < 5; i++) if (hit(pollBtn(i), x, y)) { edPoll = POLL_CHOICES[i]; return; }
+    for (int i = 0; i < 5; i++)
+      if (hit(brightBtn(i), x, y)) {   // sofort sichtbar; dauerhaft erst mit Speichern
+        edBright = BRIGHT_CHOICES[i];
+        disp::setBrightness(brightDuty(edBright));
+        return;
+      }
     if (hit(R_UPD, x, y)) {
       if (updateVersion.length()) {
         askConfirm(A_OTA, "Update " + updateVersion + " installieren?", "Das Display startet danach neu.");
@@ -2280,7 +2312,7 @@ static void handleTouch() {
     lastTouchMs = millis();
     if (dimmed) {
       dimmed = false;
-      disp::setBrightness(BRIGHT_ON);
+      disp::setBrightness(brightDuty(brightPct));
     } else if (screen == SCR_OVERVIEW && confirmAct == A_NONE) {
       pendingTap = true;
     } else {
@@ -2338,7 +2370,7 @@ void setup() {
   canvas.setPsram(true);
   canvas.setColorDepth(16);
   if (!canvas.createSprite(disp::W, disp::H)) Serial.println("Zwischenbild konnte nicht angelegt werden (PSRAM?)");
-  disp::setBrightness(BRIGHT_ON);
+  disp::setBrightness(brightDuty(brightPct));
 
   fS.begin(FONT_S, sizeof(FONT_S));
   fT.begin(FONT_T, sizeof(FONT_T));
@@ -2436,6 +2468,7 @@ void loop() {
   bool unfertig = violetHost.length() == 0 || WiFi.status() != WL_CONNECTED;
   if (screen != SCR_OVERVIEW && !(screen == SCR_SETTINGS && unfertig) &&
       millis() - lastTouchMs > PAGE_TIMEOUT_MS) {
+    if (screen == SCR_SETTINGS) disp::setBrightness(brightDuty(brightPct));   // ungespeicherte Vorschau verwerfen
     screen = SCR_OVERVIEW;
     confirmAct = A_NONE;
     wifiList = false;
@@ -2445,7 +2478,7 @@ void loop() {
 
   if (!dimmed && millis() - lastTouchMs > DIM_AFTER_MS) {
     dimmed = true;
-    disp::setBrightness(BRIGHT_DIM);
+    disp::setBrightness(dimDuty());
   }
 
   if (needRedraw) draw();
