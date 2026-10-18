@@ -99,6 +99,23 @@ static bool begin() {
   return fb != nullptr;
 }
 
+// --------------------------- Kontrast (Gamma) --------------------------
+// Manche Panels (v. a. das 7") zeigen dunkle Farben zu hell – das Bild wirkt flau.
+// Eine Gamma-Kurve je Farbkanal dunkelt dunkle und mittlere Toene ab,
+// Schwarz und Weiss bleiben. Wird beim Kopieren ins Panel angewendet.
+static uint8_t lutR[32], lutG[64], lutB[32];
+static bool    lutOn = false;
+
+static void setGamma(float g) {
+  lutOn = (g > 1.01f || g < 0.99f);
+  for (int i = 0; i < 32; i++) {
+    uint8_t v = (uint8_t)lroundf(powf(i / 31.0f, g) * 31.0f);
+    lutR[i] = v;
+    lutB[i] = v;
+  }
+  for (int i = 0; i < 64; i++) lutG[i] = (uint8_t)lroundf(powf(i / 63.0f, g) * 63.0f);
+}
+
 // Bereich aus dem Zwischenbild (LovyanGFX speichert RGB565 byte-vertauscht)
 // in den Bildspeicher des Panels kopieren
 static void copyRect(const uint16_t* src, int x, int y, int w, int h) {
@@ -111,7 +128,14 @@ static void copyRect(const uint16_t* src, int x, int y, int w, int h) {
   for (int row = y; row < y + h; row++) {
     const uint16_t* s = src + row * W + x;
     uint16_t* d = fb + row * W + x;
-    for (int i = 0; i < w; i++) d[i] = __builtin_bswap16(s[i]);
+    if (!lutOn) {
+      for (int i = 0; i < w; i++) d[i] = __builtin_bswap16(s[i]);
+    } else {
+      for (int i = 0; i < w; i++) {
+        uint16_t v = __builtin_bswap16(s[i]);
+        d[i] = ((uint16_t)lutR[v >> 11] << 11) | ((uint16_t)lutG[(v >> 5) & 0x3F] << 5) | lutB[v & 0x1F];
+      }
+    }
   }
 }
 

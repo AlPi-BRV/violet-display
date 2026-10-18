@@ -123,7 +123,7 @@ Später öffnet das **Zahnrad** neben „Pool“ die Einstellungen
 | WLAN | Netz suchen und wählen, WLAN-Passwort |
 | IP | Automatisch (DHCP) oder feste IP mit Subnetz, Gateway, DNS |
 | Anzeige | Werte wechseln, Schrittnamen der Rückspülung, Winterbetrieb Absorber / Heizung |
-| System | Abfrageintervall, Update, Helligkeit (20–100 %), Werkseinstellungen |
+| System | Abfrageintervall, Update, Helligkeit & Kontrast (mit Testbild), Werkseinstellungen |
 
 Benutzer und Passwort sind nur für Schaltbefehle nötig; das Lesen der Werte
 funktioniert bei der Violet ohne Anmeldung. Änderungen an WLAN oder IP starten
@@ -131,8 +131,10 @@ das Display neu.
 
 ## Updates
 
-Das Display fragt einmal am Tag hier nach der neuesten Version. Gibt es eine,
-erscheint oben „Update … verfügbar“. Installiert wird über **Einstellungen →
+Das Display fragt eine Minute nach dem Einschalten und danach alle 24 Stunden
+hier nach der neuesten Version (klappt die Abfrage nicht, nach 15 Minuten erneut).
+Gibt es eine, erscheint oben „Update … verfügbar“. Sofort prüfen: **Einstellungen →
+System → Nach Update suchen**. Installiert wird über **Einstellungen →
 System → Update installieren** – das Display lädt die neue Firmware per WLAN,
 startet neu und behält alle Einstellungen.
 

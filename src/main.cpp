@@ -25,7 +25,7 @@
 #include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.3.6"
+#define FW_VERSION  "0.3.7"
 
 // Board-Kennung: steckt in jedem Dateinamen des Releases. Die Update-Suche
 // nimmt NUR Dateien mit der eigenen Kennung, damit ein 5" nie die 7"-Firmware
@@ -46,6 +46,7 @@
 #define GITHUB_REPO "AlPi-BRV/violet-display"
 #define UPDATE_CHECK_EVERY_MS (24UL * 60UL * 60UL * 1000UL)
 #define UPDATE_FIRST_CHECK_MS (60UL * 1000UL)
+#define UPDATE_RETRY_MS       (15UL * 60UL * 1000UL)   // nach Fehlschlag (kein WLAN, GitHub nicht erreichbar)
 
 // ---------------------------------------------------------------
 // Voreinstellungen (koennen in config_local.h ueberschrieben werden)
@@ -81,9 +82,17 @@
 // Das 7" ist bei gleicher Einstellung deutlich heller als das 5".
 #ifndef BRIGHT_DEFAULT_PCT
 #if defined(BOARD_CROWPANEL7)
-#define BRIGHT_DEFAULT_PCT 60
+#define BRIGHT_DEFAULT_PCT 40
 #else
 #define BRIGHT_DEFAULT_PCT 100
+#endif
+#endif
+// Standard-Kontrast (0 = Normal ... 3 = Max); das 7" wirkt ohne Korrektur flau
+#ifndef CONTRAST_DEFAULT
+#if defined(BOARD_CROWPANEL7)
+#define CONTRAST_DEFAULT 2
+#else
+#define CONTRAST_DEFAULT 0
 #endif
 #endif
 #ifndef BRIGHT_DIM
@@ -166,11 +175,14 @@ static bool     winterHeater = false;   // Winterbetrieb: Heizung gesperrt
 static bool     rotateVals   = false;   // Temperatur / Wasserwerte alle 5 s wechseln
 static bool     stepNames    = true;    // Rueckspuelung: Schritt 4 = Rueckspuelen, 5 = Nachspuelen
 static uint8_t  brightPct    = BRIGHT_DEFAULT_PCT;   // Helligkeit in Prozent
+static uint8_t  contrastLvl  = CONTRAST_DEFAULT;     // Kontraststufe (Gamma)
 static String   fwUpdatedFrom;   // gesetzt, wenn seit dem letzten Start aktualisiert wurde
 
 static const uint32_t POLL_CHOICES[] = { 15000, 30000, 60000, 120000, 300000 };
 static const char* const POLL_LABEL[] = { "15 s", "30 s", "1 min", "2 min", "5 min" };
-static const uint8_t BRIGHT_CHOICES[] = { 20, 40, 60, 80, 100 };
+static const uint8_t BRIGHT_CHOICES[] = { 10, 20, 40, 70, 100 };
+static const float   CONTRAST_GAMMA[] = { 1.0f, 1.35f, 1.7f, 2.1f };
+static const char* const CONTRAST_LABEL[] = { "Normal", "Mehr", "Stark", "Max" };
 
 // Prozent -> PWM-Wert (0..255); gedimmt nie heller als die eingestellte Helligkeit
 static uint8_t brightDuty(uint8_t pct) { return (uint8_t)((uint16_t)pct * 255 / 100); }
@@ -199,6 +211,8 @@ static void loadSettings() {
   stepNames  = prefs.getBool("bwnames", true);
   brightPct  = prefs.getUChar("bright", BRIGHT_DEFAULT_PCT);
   if (brightPct < 10 || brightPct > 100) brightPct = BRIGHT_DEFAULT_PCT;
+  contrastLvl = prefs.getUChar("contrast", CONTRAST_DEFAULT);
+  if (contrastLvl > 3) contrastLvl = CONTRAST_DEFAULT;
   prefs.end();
 
   // Nach einem Update einmal Bescheid geben
@@ -296,7 +310,10 @@ static uint32_t pollSoonAt = 0;
 // Update
 static String   updateVersion;     // neuere Version auf GitHub (leer = keine)
 static String   updateUrl;         // Download-Adresse der App-Datei
-static uint32_t nextUpdateCheck = UPDATE_FIRST_CHECK_MS;
+// Update-Pruefung: 1 min nach dem Start, danach alle 24 h; klappt sie nicht,
+// erneut nach 15 min (bis 0.3.6 erst wieder nach 24 h)
+static uint32_t lastUpdateCheck = 0;
+static uint32_t updateWaitMs    = UPDATE_FIRST_CHECK_MS;
 
 static void toast(const String& t, uint16_t col, uint32_t ms = 4000) {
   toastText = t;
@@ -1588,7 +1605,7 @@ static bool     edShowPass = false;
 static bool     edIpFixed = false;
 static uint32_t edPoll = 30000;
 static bool     edWinSol = false, edWinHeat = false, edRotate = false, edNames = true;
-static uint8_t  edBright = BRIGHT_DEFAULT_PCT;
+static bool     picPage = false;   // Unterseite Helligkeit & Kontrast
 enum KbLayer { KB_LOWER, KB_UPPER, KB_SYM };
 static KbLayer  kbLayer = KB_LOWER;
 
@@ -1638,7 +1655,12 @@ static Rect padKey(int i) { return { PAD_X + (i % 3) * (PAD_W + 8), PAD_Y + (i /
 static Rect pollBtn(int i) { return { 250 + i * 108, HEAD + 22, 100, 60 }; }
 static const Rect R_UPD     = { 250, HEAD + 112, 540, 60 };
 static const Rect R_FACT    = { 250, HEAD + 292, 300, 60 };
-static Rect brightBtn(int i) { return { 250 + i * 108, HEAD + 202, 100, 60 }; }
+static const Rect R_PIC     = { 250, HEAD + 202, 540, 60 };
+
+// Unterseite Helligkeit & Kontrast
+static const int PIC_RAMP_Y = HEAD + 14, PIC_RAMP_H = 34, PIC_RAMP_G = 6, PIC_STEP = 24, PIC_X0 = 16;
+static Rect contrastBtn(int i) { return { 250 + i * 136, HEAD + 272, 128, 60 }; }
+static Rect brightBtn(int i)   { return { 250 + i * 108, HEAD + 356, 100, 60 }; }
 
 // Reiter Anzeige: Zeile 0 Werte-Wechsel, 1 Schrittnamen, 2 Winter Absorber, 3 Winter Heizung
 static Rect optBtn(int row, int col) { return { 250 + col * 150, HEAD + 22 + row * 92, 140, 60 }; }
@@ -1712,7 +1734,7 @@ static void openSettings(int tab) {
   edWinHeat = winterHeater;
   edRotate = rotateVals;
   edNames = stepNames;
-  edBright = brightPct;
+  picPage = false;
   edTab = tab;
   edField = tab == 0 ? 0 : (tab == 1 ? 3 : 5);
   edShowPass = false;
@@ -1829,7 +1851,61 @@ static void drawSettings() {
   }
 }
 
+static void drawPicture() {
+  useFont(fT);
+  text("Helligkeit & Kontrast", M + 6, HEAD / 2, C_TEXT, ML_DATUM);
+  button(R_SAVE, "Fertig", false, C_BTN, C_ACC_GRN, true);
+  // Testbild: Grau, Rot, Gruen, Blau in je 32 Stufen von schwarz bis voll
+  for (int row = 0; row < 4; row++) {
+    int y = PIC_RAMP_Y + row * (PIC_RAMP_H + PIC_RAMP_G);
+    for (int i = 0; i < 32; i++) {
+      uint16_t r = (row == 0 || row == 1) ? i : 0;
+      uint16_t g = (row == 0 || row == 2) ? (i * 63 + 15) / 31 : 0;
+      uint16_t b = (row == 0 || row == 3) ? i : 0;
+      canvas.fillRect(PIC_X0 + i * PIC_STEP, y, PIC_STEP, PIC_RAMP_H, (uint16_t)((r << 11) | (g << 5) | b));
+    }
+  }
+  int yh = PIC_RAMP_Y + 4 * (PIC_RAMP_H + PIC_RAMP_G) + 14;
+  useFont(fS);
+  text("Jede Leiste soll gleichmäßig von Schwarz nach hell verlaufen.", M + 6, yh, C_DIM, ML_DATUM);
+  text("Kontrast: Hintergrund dunkel, die linken Stufen noch erkennbar.", M + 6, yh + 26, C_DIM, ML_DATUM);
+
+  useFont(fT);
+  text("Kontrast", M + 6, contrastBtn(0).y + 30, C_TEXT, ML_DATUM);
+  for (int i = 0; i < 4; i++) button(contrastBtn(i), CONTRAST_LABEL[i], contrastLvl == i);
+  useFont(fT);
+  text("Helligkeit", M + 6, brightBtn(0).y + 30, C_TEXT, ML_DATUM);
+  for (int i = 0; i < 5; i++) button(brightBtn(i), String(BRIGHT_CHOICES[i]) + " %", brightPct == BRIGHT_CHOICES[i]);
+}
+
+// Aenderungen gelten sofort und werden direkt gespeichert
+static void pictureTap(int x, int y) {
+  if (hit(R_SAVE, x, y)) { picPage = false; return; }
+  for (int i = 0; i < 4; i++)
+    if (hit(contrastBtn(i), x, y)) {
+      contrastLvl = i;
+      disp::setGamma(CONTRAST_GAMMA[i]);
+      prefs.begin("pooldisp", false);
+      prefs.putUChar("contrast", contrastLvl);
+      prefs.end();
+      return;
+    }
+  for (int i = 0; i < 5; i++)
+    if (hit(brightBtn(i), x, y)) {
+      brightPct = BRIGHT_CHOICES[i];
+      disp::setBrightness(brightDuty(brightPct));
+      prefs.begin("pooldisp", false);
+      prefs.putUChar("bright", brightPct);
+      prefs.end();
+      return;
+    }
+}
+
 static void drawSettingsBody() {
+  if (picPage) {
+    drawPicture();
+    return;
+  }
   if (wifiList) {
     drawWifiList();
     return;
@@ -1918,8 +1994,8 @@ static void drawSettingsBody() {
       button(R_UPD, "Nach Update suchen", false);
 
     useFont(fT);
-    text("Helligkeit", M + 6, brightBtn(0).y + 30, C_TEXT, ML_DATUM);
-    for (int i = 0; i < 5; i++) button(brightBtn(i), String(BRIGHT_CHOICES[i]) + " %", edBright == BRIGHT_CHOICES[i]);
+    text("Bild", M + 6, R_PIC.y + 30, C_TEXT, ML_DATUM);
+    button(R_PIC, "Helligkeit & Kontrast ...", false);
 
     useFont(fT);
     text("Zurücksetzen", M + 6, R_FACT.y + 30, C_TEXT, ML_DATUM);
@@ -1998,7 +2074,6 @@ static void saveSettings() {
   winterHeater = edWinHeat;
   rotateVals   = edRotate;
   stepNames    = edNames;
-  brightPct    = edBright;
 
   prefs.begin("pooldisp", false);
   prefs.putString("host", violetHost);
@@ -2016,7 +2091,6 @@ static void saveSettings() {
   prefs.putBool("winheat", winterHeater);
   prefs.putBool("rotate", rotateVals);
   prefs.putBool("bwnames", stepNames);
-  prefs.putUChar("bright", brightPct);
   prefs.end();
   Serial.printf("Einstellungen gespeichert: Violet %s, WLAN %s, IP %s\n", violetHost.c_str(),
                 wifiSsid.c_str(), ipFixed ? ipAddr.c_str() : "DHCP");
@@ -2063,6 +2137,10 @@ static void keyInput(const String& t) {
 
 static void settingsTap(int x, int y) {
   needRedraw = true;
+  if (picPage) {
+    pictureTap(x, y);
+    return;
+  }
   if (wifiList) {
     if (hit(R_SAVE, x, y)) { wifiList = false; return; }
     for (int i = 0; i < scanN; i++) {
@@ -2084,10 +2162,7 @@ static void settingsTap(int x, int y) {
       return;
     }
   }
-  if (hit(R_CANCEL, x, y)) {
-    disp::setBrightness(brightDuty(brightPct));   // Vorschau verwerfen
-    screen = SCR_OVERVIEW; needFull = true; return;
-  }
+  if (hit(R_CANCEL, x, y)) { screen = SCR_OVERVIEW; needFull = true; return; }
   if (hit(R_SAVE, x, y))   { saveSettings(); return; }
 
   if (edTab == 0 || edTab == 1) {
@@ -2149,12 +2224,7 @@ static void settingsTap(int x, int y) {
     }
   } else {
     for (int i = 0; i < 5; i++) if (hit(pollBtn(i), x, y)) { edPoll = POLL_CHOICES[i]; return; }
-    for (int i = 0; i < 5; i++)
-      if (hit(brightBtn(i), x, y)) {   // sofort sichtbar; dauerhaft erst mit Speichern
-        edBright = BRIGHT_CHOICES[i];
-        disp::setBrightness(brightDuty(edBright));
-        return;
-      }
+    if (hit(R_PIC, x, y)) { picPage = true; return; }
     if (hit(R_UPD, x, y)) {
       if (updateVersion.length()) {
         askConfirm(A_OTA, "Update " + updateVersion + " installieren?", "Das Display startet danach neu.");
@@ -2162,7 +2232,8 @@ static void settingsTap(int x, int y) {
         showMessage("Suche nach Updates ...");
         if (!checkForUpdate()) toast("GitHub nicht erreichbar", C_ACC_ORG, 5000);
         else if (updateVersion.length() == 0) toast("Firmware ist aktuell", C_ACC_GRN, 4000);
-        nextUpdateCheck = millis() + UPDATE_CHECK_EVERY_MS;
+        lastUpdateCheck = millis();
+        updateWaitMs = UPDATE_CHECK_EVERY_MS;
       }
       return;
     }
@@ -2365,6 +2436,7 @@ void setup() {
 
   disp::backlightBegin();
   disp::setBrightness(0);
+  disp::setGamma(CONTRAST_GAMMA[contrastLvl]);
   if (!disp::begin()) Serial.println("Display konnte nicht gestartet werden");
   disp::touchBegin();
   canvas.setPsram(true);
@@ -2454,9 +2526,10 @@ void loop() {
   }
 
   // Update-Pruefung einmal am Tag, nur auf der Uebersicht
-  if (screen == SCR_OVERVIEW && millis() >= nextUpdateCheck) {
-    nextUpdateCheck = millis() + UPDATE_CHECK_EVERY_MS;
-    checkForUpdate();
+  if (screen == SCR_OVERVIEW && millis() - lastUpdateCheck >= updateWaitMs) {
+    lastUpdateCheck = millis();
+    updateWaitMs = checkForUpdate() ? UPDATE_CHECK_EVERY_MS : UPDATE_RETRY_MS;
+    Serial.printf("Naechste Update-Pruefung in %lu min\n", (unsigned long)(updateWaitMs / 60000UL));
   }
 
   // Rueckmeldung ausblenden
@@ -2468,7 +2541,6 @@ void loop() {
   bool unfertig = violetHost.length() == 0 || WiFi.status() != WL_CONNECTED;
   if (screen != SCR_OVERVIEW && !(screen == SCR_SETTINGS && unfertig) &&
       millis() - lastTouchMs > PAGE_TIMEOUT_MS) {
-    if (screen == SCR_SETTINGS) disp::setBrightness(brightDuty(brightPct));   // ungespeicherte Vorschau verwerfen
     screen = SCR_OVERVIEW;
     confirmAct = A_NONE;
     wifiList = false;
