@@ -817,20 +817,35 @@ static long versionNum(const String& v) {
 static bool otaPossible() { return esp_ota_get_next_update_partition(nullptr) != nullptr; }
 
 // true = Abfrage hat geklappt
-static bool checkForUpdate() {
-  if (WiFi.status() != WL_CONNECTED) return false;
+static String updateErr;   // Grund, falls die letzte Pruefung fehlschlug (fuer die Anzeige)
+
+// Ein Abrufversuch; true = Antwort 200 und JSON gelesen
+static bool fetchLatest(JsonDocument& doc) {
+  // TLS braucht einen grossen zusammenhaengenden Block im internen RAM
+  size_t blk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  String info = " (WLAN " + String(WiFi.RSSI()) + " dBm, RAM " + String((unsigned)(blk / 1024)) + " kB)";
+  Serial.printf("Update-Pruefung:%s\n", info.c_str());
   WiFiClientSecure client;
   client.setInsecure();
+  client.setHandshakeTimeout(20);
   HTTPClient http;
-  http.setTimeout(8000);
-  http.setConnectTimeout(5000);
+  http.setTimeout(15000);
+  http.setConnectTimeout(10000);
   http.useHTTP10(true);
-  if (!http.begin(client, "https://api.github.com/repos/" GITHUB_REPO "/releases/latest")) return false;
+  if (!http.begin(client, "https://api.github.com/repos/" GITHUB_REPO "/releases/latest")) {
+    updateErr = "Verbindung nicht möglich" + info;
+    return false;
+  }
   http.setUserAgent("violet-display/" FW_VERSION);
   http.addHeader("Accept", "application/vnd.github+json");
   int code = http.GET();
   if (code != 200) {
-    Serial.printf("Update-Pruefung: HTTP %d\n", code);
+    if (code == HTTPC_ERROR_CONNECTION_REFUSED) updateErr = "Verbindung fehlgeschlagen" + info;
+    else if (code == HTTPC_ERROR_READ_TIMEOUT) updateErr = "Zeitüberschreitung" + info;
+    else if (code < 0) updateErr = HTTPClient::errorToString(code) + info;
+    else if (code == 403 || code == 429) updateErr = "GitHub: zu viele Abfragen (HTTP " + String(code) + "), später erneut";
+    else updateErr = "GitHub antwortet HTTP " + String(code);
+    Serial.printf("Update-Pruefung: HTTP %d %s\n", code, updateErr.c_str());
     http.end();
     return false;
   }
@@ -838,11 +853,25 @@ static bool checkForUpdate() {
   filter["tag_name"] = true;
   filter["assets"][0]["name"] = true;
   filter["assets"][0]["browser_download_url"] = true;
-  JsonDocument doc;
   DeserializationError err = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
-  if (err) return false;
+  if (err) {
+    updateErr = String("Antwort unvollständig (") + err.c_str() + ")" + info;
+    Serial.printf("Update-Pruefung: %s\n", updateErr.c_str());
+    return false;
+  }
+  return true;
+}
 
+static bool checkForUpdate() {
+  if (WiFi.status() != WL_CONNECTED) { updateErr = "kein WLAN"; return false; }
+  JsonDocument doc;
+  if (!fetchLatest(doc)) {
+    delay(1500);                       // ein zweiter Versuch, z. B. bei schwachem WLAN
+    doc.clear();
+    if (!fetchLatest(doc)) return false;
+  }
+  updateErr = "";
   String tag = doc["tag_name"] | "";
   if (tag.startsWith("v") || tag.startsWith("V")) tag.remove(0, 1);
   String url;
@@ -2230,7 +2259,7 @@ static void settingsTap(int x, int y) {
         askConfirm(A_OTA, "Update " + updateVersion + " installieren?", "Das Display startet danach neu.");
       } else {
         showMessage("Suche nach Updates ...");
-        if (!checkForUpdate()) toast("GitHub nicht erreichbar", C_ACC_ORG, 5000);
+        if (!checkForUpdate()) toast("GitHub nicht erreichbar: " + updateErr, C_ACC_ORG, 15000);
         else if (updateVersion.length() == 0) toast("Firmware ist aktuell", C_ACC_GRN, 4000);
         lastUpdateCheck = millis();
         updateWaitMs = UPDATE_CHECK_EVERY_MS;
