@@ -82,7 +82,7 @@
 // Das 7" ist bei gleicher Einstellung deutlich heller als das 5".
 #ifndef BRIGHT_DEFAULT_PCT
 #if defined(BOARD_CROWPANEL7)
-#define BRIGHT_DEFAULT_PCT 40
+#define BRIGHT_DEFAULT_PCT 70
 #else
 #define BRIGHT_DEFAULT_PCT 100
 #endif
