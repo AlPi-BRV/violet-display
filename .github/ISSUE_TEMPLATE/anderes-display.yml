@@ -1,0 +1,39 @@
+name: Anderes Display
+description: Firmware auf einem anderen ESP32-Display nutzen
+title: "Anderes Display: "
+labels: ["anderes Display"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke für dein Interesse! Mit den Angaben unten lässt sich abschätzen, ob die Firmware
+        auf deinem Display laufen kann und was dafür angepasst werden müsste.
+  - type: input
+    id: modell
+    attributes:
+      label: Modell und SKU
+      description: So wie auf der Platine oder im Shop angegeben
+      placeholder: z. B. Elecrow CrowPanel 4.3" DIS06043H
+    validations:
+      required: true
+  - type: input
+    id: link
+    attributes:
+      label: Link zum Produkt
+      description: Shop-Seite oder Hersteller-Wiki
+    validations:
+      required: true
+  - type: textarea
+    id: foto
+    attributes:
+      label: Foto der Rückseite der Platine
+      description: |
+        Bild einfach hier hineinziehen. Gut lesbar sollten sein: Modell/SKU, Board-Revision
+        (z. B. „V3.0“), der Chip (z. B. „ESP32-S3-WROOM-1-N4R8“), Steckverbinder und Taster.
+    validations:
+      required: true
+  - type: textarea
+    id: sonstiges
+    attributes:
+      label: Was hast du schon ausprobiert?
+      description: Z. B. welche Firmware-Datei, was auf dem Bild zu sehen war (schwarz, gestört, Touch verdreht …)

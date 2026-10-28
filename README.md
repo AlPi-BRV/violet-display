@@ -76,6 +76,20 @@ Platine neben dem Flachbandkabel, zusammen mit der SKU.
 Getestet sind nur diese beiden Varianten. Andere CrowPanel-Größen, die „Advance“-Reihe
 oder ältere Revisionen haben eine andere Pin-Belegung.
 
+### Anderes Display?
+
+Du hast ein anderes ESP32-Display – eine andere CrowPanel-Größe, die „Advance“-Reihe,
+eine ältere Board-Revision oder ein Display eines anderen Herstellers – und möchtest die
+Firmware darauf nutzen? Dann leg bitte ein **[Issue](https://github.com/AlPi-BRV/violet-display/issues/new?template=anderes-display.yml)**
+an und häng ein **Foto der Rückseite der Platine** an. Gut lesbar sollten sein:
+
+- Aufdruck mit **Modell / SKU** und **Board-Revision** (z. B. „V3.0“)
+- der **Chip** (z. B. „ESP32-S3-WROOM-1-N4R8“)
+- die **Steckverbinder** und **Taster** (USB, BOOT, RESET, SD-Karte)
+
+Dazu der **Link zum Produkt** (Shop oder Hersteller-Wiki). Damit lässt sich meist abschätzen,
+ob das Display passt und was angepasst werden müsste.
+
 | Display | Neu installieren (USB) | Update über WLAN |
 |---|---|---|
 | 5" | `violet-display-5zoll-<version>-full.bin` | `violet-display-5zoll-<version>-ota.bin` |
