@@ -58,6 +58,12 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 [CrowPanel 7.0" bei Amazon](https://www.amazon.de/dp/B0CHDYR54Q) ·
 [Elecrow-Wiki zum 7.0"](https://www.elecrow.com/wiki/esp32-display-702727-intelligent-touch-screen-wi-fi26ble-800480-hmi-display.html)
 
+> **Kaufempfehlung: das 5".** Das 7" (DIS08070H) läuft zwar mit derselben Firmware, sein Panel
+> ist im Vergleich aber deutlich schwächer: Das Bild wirkt flau und dunkler, und der Blickwinkel
+> ist eng – schon leicht von der Seite oder von oben verblassen die Farben. Die Einstellung
+> *Kontrast* mildert das etwas, behebt es aber nicht. Wer das Display an der Wand oder schräg im
+> Blick hat, ist mit dem 5" besser bedient.
+
 Beide Größen haben dieselbe Oberfläche (800 × 480), brauchen aber **jeweils eigene Firmware**.
 Beim Kauf auf **Board-Revision V3.0** achten – sie steht auf der Rückseite der
 Platine neben dem Flachbandkabel, zusammen mit der SKU.
