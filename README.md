@@ -43,7 +43,12 @@ Das Display holt sich die Werte per WLAN direkt von der Violet.
 - **Werkseinstellungen** direkt am Display
 - **Ruhiges Bild:** Ausgabe ans Panel über einen Zwischenpuffer im internen RAM –
   kein Zucken beim Datenabruf, beim Speichern oder während eines Updates
-- Dimmt nach 5 Minuten ohne Berührung; die erste Berührung weckt nur auf
+- **Ruhezustand** nach 5 Minuten ohne Berührung: *Abdimmen* oder *Schwarz* (Hintergrundlicht aus,
+  schont die LED-Beleuchtung); die erste Berührung weckt nur auf
+- **Störungen auf einen Blick:** Ist das WLAN weg, erscheint ein großes durchgestrichenes WLAN-Symbol,
+  antwortet die Violet nicht, ein durchgestrichenes Steuerungs-Symbol. Veraltete Werte werden
+  so lange ausgeblendet. Das Display verbindet sich selbst neu – auch wenn der Router nach einem
+  Stromausfall später hochfährt. Im Ruhezustand *Schwarz* leuchtet es bei einer Störung gedimmt auf.
 
 ## Hardware
 
@@ -143,7 +148,7 @@ Später öffnet das **Zahnrad** neben „Pool“ die Einstellungen
 | WLAN | Netz suchen und wählen, WLAN-Passwort |
 | IP | Automatisch (DHCP) oder feste IP mit Subnetz, Gateway, DNS |
 | Anzeige | Werte wechseln, Schrittnamen der Rückspülung, Winterbetrieb Absorber / Heizung |
-| System | Abfrageintervall, Update, Helligkeit & Kontrast (mit Testbild), Werkseinstellungen |
+| System | Abfrageintervall, Update, Helligkeit & Kontrast (mit Testbild), Ruhezustand (Abdimmen / Schwarz), Werkseinstellungen |
 
 Benutzer und Passwort sind nur für Schaltbefehle nötig; das Lesen der Werte
 funktioniert bei der Violet ohne Anmeldung. Änderungen an WLAN oder IP starten

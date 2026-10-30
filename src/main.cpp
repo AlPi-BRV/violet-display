@@ -25,7 +25,7 @@
 #include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.3.7"
+#define FW_VERSION  "0.3.8"
 
 // Board-Kennung: steckt in jedem Dateinamen des Releases. Die Update-Suche
 // nimmt NUR Dateien mit der eigenen Kennung, damit ein 5" nie die 7"-Firmware
@@ -97,6 +97,18 @@
 #endif
 #ifndef BRIGHT_DIM
 #define BRIGHT_DIM     30
+#endif
+// Violet antwortet nicht: schneller erneut fragen, Fehlerbild ab dem 2. Fehlversuch
+#ifndef FAIL_RETRY_MS
+#define FAIL_RETRY_MS  (15UL * 1000UL)
+#endif
+// WLAN weg: so lange warten, bevor das grosse Symbol erscheint (kurze Aussetzer ignorieren)
+#ifndef WIFI_GRACE_MS
+#define WIFI_GRACE_MS  (10UL * 1000UL)
+#endif
+// WLAN weg: so oft neu verbinden
+#ifndef WIFI_RETRY_MS
+#define WIFI_RETRY_MS  (30UL * 1000UL)
 #endif
 #ifndef PAGE_TIMEOUT_MS
 #define PAGE_TIMEOUT_MS (60UL * 1000UL)
@@ -175,6 +187,7 @@ static bool     winterHeater = false;   // Winterbetrieb: Heizung gesperrt
 static bool     rotateVals   = false;   // Temperatur / Wasserwerte alle 5 s wechseln
 static bool     stepNames    = true;    // Rueckspuelung: Schritt 4 = Rueckspuelen, 5 = Nachspuelen
 static uint8_t  brightPct    = BRIGHT_DEFAULT_PCT;   // Helligkeit in Prozent
+static bool     sleepBlack   = false;   // Ruhezustand: false = abdimmen, true = schwarz
 static uint8_t  contrastLvl  = CONTRAST_DEFAULT;     // Kontraststufe (Gamma)
 static String   fwUpdatedFrom;   // gesetzt, wenn seit dem letzten Start aktualisiert wurde
 
@@ -212,6 +225,7 @@ static void loadSettings() {
   brightPct  = prefs.getUChar("bright", BRIGHT_DEFAULT_PCT);
   if (brightPct < 10 || brightPct > 100) brightPct = BRIGHT_DEFAULT_PCT;
   contrastLvl = prefs.getUChar("contrast", CONTRAST_DEFAULT);
+  sleepBlack  = prefs.getBool("sleepblk", false);
   if (contrastLvl > 3) contrastLvl = CONTRAST_DEFAULT;
   prefs.end();
 
@@ -434,6 +448,23 @@ static int wifiBars() {
   if (WiFi.status() != WL_CONNECTED) return -1;
   int r = WiFi.RSSI();
   return r > -60 ? 3 : (r > -70 ? 2 : (r > -80 ? 1 : 0));
+}
+
+// Stoerung fuer das grosse Fehlerbild der Uebersicht.
+// Nur wenn WLAN und Violet ueberhaupt eingerichtet sind.
+enum NetErr { NE_NONE = 0, NE_WIFI, NE_VIOLET };
+static uint32_t wifiLostSince = 0;   // 0 = verbunden
+
+static NetErr netError() {
+  if (wifiSsid.length() == 0 || violetHost.length() == 0) return NE_NONE;
+  if (WiFi.status() != WL_CONNECTED) {
+    if (wifiLostSince == 0) wifiLostSince = millis() ? millis() : 1;
+    if (millis() - wifiLostSince >= WIFI_GRACE_MS) return NE_WIFI;
+    return NE_NONE;
+  }
+  wifiLostSince = 0;
+  if (failCount >= 2 || (!data.valid && failCount >= 1)) return NE_VIOLET;
+  return NE_NONE;
 }
 
 // ---------------------------------------------------------------
@@ -1049,7 +1080,7 @@ static void drawDialog() {
 // Uebersicht
 // ---------------------------------------------------------------
 static String headerKey() {
-  String k = String(wifiBars()) + "|" + data.uhrzeit + "|" + String((int)(data.valid && failCount < 3)) +
+  String k = String(wifiBars()) + "|" + data.uhrzeit + "|" + String((int)(data.valid && failCount < 2)) +
              "|" + updateVersion + "|P" + String(ovPage);
   if (millis() < toastUntil) k += "|T" + toastText;
   return k;
@@ -1071,7 +1102,7 @@ static void drawOverviewHeader() {
   drawWifi(wx, HEAD / 2 + 12, wifiBars());
   int xr = wx - 34;
 
-  bool online = data.valid && failCount < 3;
+  bool online = data.valid && failCount < 2;
   useFont(fT);
   if (millis() < toastUntil) {
     fitFont(toastText, xr - 200, &fT, &fS);
@@ -1349,14 +1380,103 @@ static void drawSwitchTile() {
     text("Relais: Einstellungen der Violet nicht lesbar (Login?)", r.x + 16, r.y + r.h - 18, C_DIM, ML_DATUM);
 }
 
+// ---------------------------------------------------------------
+// Grosses Fehlerbild: WLAN weg / Violet nicht erreichbar.
+// Ersetzt die Kacheln, damit keine veralteten Werte wie aktuelle aussehen.
+// ---------------------------------------------------------------
+static const Rect R_ERRAREA = { 0, HEAD, 800, 480 - HEAD };
+
+// Dicker Strich mit dunklem Rand, damit er sich vom Symbol abhebt
+static void strike(int cx, int cy, int half) {
+  canvas.drawWideLine(cx - half, cy - half, cx + half, cy + half, 13, C_BG);
+  canvas.drawWideLine(cx - half, cy - half, cx + half, cy + half, 7, C_ACC_RED);
+}
+
+static void bigWifiSymbol(int cx, int cy) {
+  // cx/cy = Mittelpunkt des Symbols; Boegen nach oben, Punkt unten
+  int by = cy + 55;
+  for (int i = 0; i < 3; i++) {
+    int r1 = 52 + i * 38;
+    canvas.fillArc(cx, by, r1 - 20, r1, 225, 315, C_ACC_ORG);
+  }
+  canvas.fillSmoothCircle(cx, by - 4, 14, C_ACC_ORG);
+  strike(cx, cy - 10, 95);
+}
+
+// Allgemeines Symbol fuer die Poolsteuerung: Geraet mit Wasserwellen
+static void bigVioletSymbol(int cx, int cy) {
+  const int w = 200, h = 140;
+  int x = cx - w / 2, y = cy - h / 2;
+  canvas.fillSmoothRoundRect(x, y, w, h, 18, C_ACC_ORG);
+  canvas.fillSmoothRoundRect(x + 9, y + 9, w - 18, h - 18, 11, C_BG);
+  for (int row = 0; row < 2; row++) {
+    int wy = cy - 14 + row * 34;
+    int px = x + 30, py = wy;
+    for (int i = 1; i <= 28; i++) {
+      int nx = x + 30 + i * (w - 60) / 28;
+      int ny = wy + (int)lroundf(9.0f * sinf(i * 6.2832f / 14.0f));
+      canvas.drawWideLine(px, py, nx, ny, 4, C_ACC_BLUE);
+      px = nx; py = ny;
+    }
+  }
+  strike(cx, cy, 105);
+}
+
+static String errKey(NetErr e) {
+  String k = "E" + String((int)e) + "|" + String((int)data.valid) + "|" + data.uhrzeit;
+  if (e == NE_WIFI) k += "|" + wifiSsid;
+  else k += "|" + violetHost;
+  return k;
+}
+
+static void drawErrorPanel(NetErr e) {
+  const Rect& r = R_ERRAREA;
+  canvas.fillRect(r.x, r.y, r.w, r.h, C_BG);
+  int cy = HEAD + 150;
+  if (e == NE_WIFI) bigWifiSymbol(400, cy);
+  else bigVioletSymbol(400, cy);
+
+  String t1 = e == NE_WIFI ? String("Kein WLAN") : String("Violet nicht erreichbar");
+  String t2 = e == NE_WIFI ? "Suche Netz \"" + wifiSsid + "\" ..."
+                           : "Keine Antwort von " + violetHost + " – frage weiter nach ...";
+  fitFont(t1, 760, &fB, &fT);
+  text(t1, 400, HEAD + 290, C_TEXT, MC_DATUM);
+  fitFont(t2, 760, &fT, &fS);
+  text(t2, 400, HEAD + 335, C_DIM, MC_DATUM);
+  useFont(fS);
+  if (data.valid && data.uhrzeit.length())
+    text("Letzte Werte von " + data.uhrzeit + " – werden ausgeblendet, bis wieder Daten kommen",
+         400, HEAD + 372, C_DIM, MC_DATUM);
+  text("Einstellungen: Zahnrad antippen", 400, 480 - 22, C_DIM, MC_DATUM);
+}
+
 // Nur die Bereiche neu zeichnen und uebertragen, die sich geaendert haben –
 // weniger Speicherverkehr, ruhigeres Bild.
 static String lastKeys[5];
+static NetErr lastErr = NE_NONE;
 
-static void drawOverview(bool full) {
+static bool drawOverview(bool full) {
   String keys[5];
   Rect regions[5];
   int cnt;
+  NetErr err = netError();
+  if (err != lastErr) { lastErr = err; full = true; }   // Wechsel Kacheln <-> Fehlerbild: alles neu
+  if (err != NE_NONE) {
+    if (full) canvas.fillScreen(C_BG);
+    String hk = headerKey(), ek = errKey(err);
+    if (full || hk != lastKeys[0]) {
+      lastKeys[0] = hk;
+      drawOverviewHeader();
+      if (!full) pushRegion(R_HEADER);
+    }
+    if (full || ek != lastKeys[1]) {
+      lastKeys[1] = ek;
+      drawErrorPanel(err);
+      if (!full) pushRegion(R_ERRAREA);
+    }
+    for (int i = 2; i < 5; i++) lastKeys[i] = "";
+    return full;
+  }
   if (ovPage == 0) {
     cnt = 5;
     String k[5] = { headerKey(), tempKey(), waterKey(), pumpKey(), heatKey() };
@@ -1384,6 +1504,7 @@ static void drawOverview(bool full) {
     }
     if (!full) pushRegion(regions[i]);
   }
+  return full;
 }
 
 // ---------------------------------------------------------------
@@ -1687,9 +1808,10 @@ static const Rect R_FACT    = { 250, HEAD + 292, 300, 60 };
 static const Rect R_PIC     = { 250, HEAD + 202, 540, 60 };
 
 // Unterseite Helligkeit & Kontrast
-static const int PIC_RAMP_Y = HEAD + 14, PIC_RAMP_H = 34, PIC_RAMP_G = 6, PIC_STEP = 24, PIC_X0 = 16;
-static Rect contrastBtn(int i) { return { 250 + i * 136, HEAD + 272, 128, 60 }; }
-static Rect brightBtn(int i)   { return { 250 + i * 108, HEAD + 356, 100, 60 }; }
+static const int PIC_RAMP_Y = HEAD + 10, PIC_RAMP_H = 26, PIC_RAMP_G = 6, PIC_STEP = 24, PIC_X0 = 16;
+static Rect contrastBtn(int i) { return { 250 + i * 136, HEAD + 202, 128, 56 }; }
+static Rect brightBtn(int i)   { return { 250 + i * 108, HEAD + 270, 100, 56 }; }
+static Rect sleepBtn(int i)    { return { 250 + i * 274, HEAD + 360, 266, 56 }; }
 
 // Reiter Anzeige: Zeile 0 Werte-Wechsel, 1 Schrittnamen, 2 Winter Absorber, 3 Winter Heizung
 static Rect optBtn(int row, int col) { return { 250 + col * 150, HEAD + 22 + row * 92, 140, 60 }; }
@@ -1894,10 +2016,10 @@ static void drawPicture() {
       canvas.fillRect(PIC_X0 + i * PIC_STEP, y, PIC_STEP, PIC_RAMP_H, (uint16_t)((r << 11) | (g << 5) | b));
     }
   }
-  int yh = PIC_RAMP_Y + 4 * (PIC_RAMP_H + PIC_RAMP_G) + 14;
+  int yh = PIC_RAMP_Y + 4 * (PIC_RAMP_H + PIC_RAMP_G) + 10;
   useFont(fS);
   text("Jede Leiste soll gleichmäßig von Schwarz nach hell verlaufen.", M + 6, yh, C_DIM, ML_DATUM);
-  text("Kontrast: Hintergrund dunkel, die linken Stufen noch erkennbar.", M + 6, yh + 26, C_DIM, ML_DATUM);
+  text("Kontrast: Hintergrund dunkel, die linken Stufen noch erkennbar.", M + 6, yh + 24, C_DIM, ML_DATUM);
 
   useFont(fT);
   text("Kontrast", M + 6, contrastBtn(0).y + 30, C_TEXT, ML_DATUM);
@@ -1905,6 +2027,12 @@ static void drawPicture() {
   useFont(fT);
   text("Helligkeit", M + 6, brightBtn(0).y + 30, C_TEXT, ML_DATUM);
   for (int i = 0; i < 5; i++) button(brightBtn(i), String(BRIGHT_CHOICES[i]) + " %", brightPct == BRIGHT_CHOICES[i]);
+  useFont(fT);
+  text("Nach 5 min", M + 6, sleepBtn(0).y + 16, C_TEXT, ML_DATUM);
+  useFont(fS);
+  text("ohne Berührung", M + 6, sleepBtn(0).y + 42, C_DIM, ML_DATUM);
+  button(sleepBtn(0), "Abdimmen", !sleepBlack);
+  button(sleepBtn(1), "Schwarz (schont Licht)", sleepBlack);
 }
 
 // Aenderungen gelten sofort und werden direkt gespeichert
@@ -1925,6 +2053,14 @@ static void pictureTap(int x, int y) {
       disp::setBrightness(brightDuty(brightPct));
       prefs.begin("pooldisp", false);
       prefs.putUChar("bright", brightPct);
+      prefs.end();
+      return;
+    }
+  for (int i = 0; i < 2; i++)
+    if (hit(sleepBtn(i), x, y)) {
+      sleepBlack = i == 1;
+      prefs.begin("pooldisp", false);
+      prefs.putBool("sleepblk", sleepBlack);
       prefs.end();
       return;
     }
@@ -2280,8 +2416,7 @@ static void draw() {
   if (screen == SCR_OVERVIEW && confirmAct == A_NONE) {
     bool full = needFull;
     needFull = false;
-    drawOverview(full);
-    if (full) pushAll();
+    if (drawOverview(full)) pushAll();
   } else {
     canvas.fillScreen(C_BG);
     if (screen == SCR_OVERVIEW) drawOverview(true);
@@ -2351,7 +2486,9 @@ static void onTap(int x, int y) {
   }
 
   if (hit(R_GEAR, x, y)) {
-    openSettings(0);
+    openSettings(netError() == NE_WIFI ? 1 : 0);
+  } else if (netError() != NE_NONE) {
+    return;                          // Fehlerbild: keine Kacheln bedienbar
   } else if (ovPage == 1) {
     if (hit(tall(1), x, y)) {
       swPage = 0;
@@ -2487,9 +2624,15 @@ void setup() {
   connectWifi(20000);
 
   lastTouchMs = millis();
-  if (WiFi.status() != WL_CONNECTED) {
+  if (wifiSsid.length() == 0) {      // noch nie eingerichtet
     openSettings(1);
-    toast("WLAN nicht verbunden", C_ACC_ORG, 8000);
+    lastPoll = millis();
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    // Eingerichtet, aber (noch) kein Netz – z. B. Router nach Stromausfall langsamer.
+    // Nicht in den Einstellungen haengen bleiben: Fehlerbild zeigen und weiter verbinden.
+    wifiLostSince = millis() - WIFI_GRACE_MS;   // Symbol sofort zeigen
     lastPoll = millis();
     return;
   }
@@ -2509,9 +2652,19 @@ void loop() {
 
   // Abfrage: im eingestellten Intervall, nach einem Befehl einmal sofort.
   // Waehrend der Einstellungen nicht (blockiert sonst die Tastatur).
+  // Ohne WLAN wird nicht gefragt (zaehlt auch nicht als Fehler der Violet).
+  // Antwortet die Violet nicht, nach 15 s erneut (Fehlerbild ab dem 2. Fehlversuch).
+  bool wifiOk = WiFi.status() == WL_CONNECTED;
+  static bool wifiWasOk = true;
+  if (wifiOk && !wifiWasOk) {        // WLAN wieder da: gleich abfragen
+    failCount = 0;
+    pollSoonAt = millis() + 2000;
+  }
+  wifiWasOk = wifiOk;
   bool soon = pollSoonAt && millis() >= pollSoonAt;
   uint32_t interval = bwActive() ? BW_POLL_MS : pollMs;   // Rueckspuelung: alle 2 s
-  if (screen != SCR_SETTINGS && (soon || millis() - lastPoll >= interval)) {
+  if (failCount > 0 && interval > FAIL_RETRY_MS) interval = FAIL_RETRY_MS;
+  if (wifiOk && screen != SCR_SETTINGS && (soon || millis() - lastPoll >= interval)) {
     pollSoonAt = 0;
     lastPoll = millis();
     if (pollViolet()) {
@@ -2566,8 +2719,17 @@ void loop() {
   if (millis() < toastUntil) toastShown = true;
   else if (toastShown) { toastShown = false; needRedraw = true; }
 
+  // WLAN weg: selbst neu verbinden (nicht waehrend der Einstellungen – dort laeuft ggf. die Netzsuche)
+  static uint32_t lastWifiTry = 0;
+  if (!wifiOk && wifiSsid.length() && screen != SCR_SETTINGS && millis() - lastWifiTry >= WIFI_RETRY_MS) {
+    lastWifiTry = millis();
+    Serial.println("WLAN getrennt – neuer Verbindungsversuch");
+    WiFi.disconnect();
+    WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());   // kehrt sofort zurueck, Bedienung bleibt fluessig
+  }
+
   // Bedienseiten schliessen sich selbst (Einstellungen nicht, solange nichts eingerichtet ist)
-  bool unfertig = violetHost.length() == 0 || WiFi.status() != WL_CONNECTED;
+  bool unfertig = violetHost.length() == 0 || wifiSsid.length() == 0;
   if (screen != SCR_OVERVIEW && !(screen == SCR_SETTINGS && unfertig) &&
       millis() - lastTouchMs > PAGE_TIMEOUT_MS) {
     screen = SCR_OVERVIEW;
@@ -2577,9 +2739,16 @@ void loop() {
     needRedraw = true;
   }
 
-  if (!dimmed && millis() - lastTouchMs > DIM_AFTER_MS) {
-    dimmed = true;
-    disp::setBrightness(dimDuty());
+  // Ruhezustand nach 5 min ohne Beruehrung: abdimmen oder ganz dunkel.
+  // Bei "Schwarz" leuchtet das Display gedimmt auf, solange eine Stoerung besteht –
+  // so sieht man das durchgestrichene Symbol auch im Ruhezustand.
+  if (!dimmed && millis() - lastTouchMs > DIM_AFTER_MS) dimmed = true;
+  static int lastDuty = -1;
+  int duty = !dimmed ? brightDuty(brightPct)
+                     : (!sleepBlack || netError() != NE_NONE) ? dimDuty() : 0;
+  if (duty != lastDuty) {
+    lastDuty = duty;
+    disp::setBrightness((uint8_t)duty);
   }
 
   if (needRedraw) draw();
