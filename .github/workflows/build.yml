@@ -38,7 +38,15 @@ jobs:
       - name: Firmware bauen
         run: |
           set -o pipefail
-          if ! pio run -e crowpanel5 -e crowpanel7 2>&1 | tee build.log; then
+          # Der erste Lauf baut das Arduino-Framework neu (custom_sdkconfig); dabei bricht
+          # pioarduino gelegentlich mit ".sconsign311.tmp" ab – dann einmal wiederholen.
+          ok=0
+          pio run -e crowpanel5 -e crowpanel7 2>&1 | tee build.log && ok=1
+          if [ "$ok" = 0 ] && grep -q "sconsign" build.log; then
+            echo "::warning::Framework-Neubau abgebrochen (sconsign) – zweiter Versuch"
+            pio run -e crowpanel5 -e crowpanel7 2>&1 | tee build.log && ok=1
+          fi
+          if [ "$ok" = 0 ]; then
             # Compilerfehler als Hinweise am Lauf sichtbar machen
             grep -iE "error|fail|\*\*\*|not found|no such" build.log | grep -v "^Compiling" | tail -10 | while read -r l; do echo "::error::${l:0:400}"; done
             tail -n 10 build.log | while read -r l; do echo "::warning::${l:0:400}"; done
