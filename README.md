@@ -147,7 +147,7 @@ Später öffnet das **Zahnrad** neben „Pool“ die Einstellungen
 | Violet | IP der Violet, Benutzer, Passwort, *Login testen* |
 | WLAN | Netz suchen und wählen, WLAN-Passwort |
 | IP | Automatisch (DHCP) oder feste IP mit Subnetz, Gateway, DNS |
-| Anzeige | Werte wechseln, Schrittnamen der Rückspülung, Winterbetrieb Absorber / Heizung |
+| Anzeige | Ausrichtung (USB-Anschluss links/rechts, wirkt sofort), Werte wechseln, Schrittnamen der Rückspülung, Winterbetrieb Absorber / Heizung |
 | System | Abfrageintervall, Update, Helligkeit & Kontrast (mit Testbild), Ruhezustand (Abdimmen / Schwarz), Werkseinstellungen |
 
 Benutzer und Passwort sind nur für Schaltbefehle nötig; das Lesen der Werte

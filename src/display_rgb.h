@@ -116,6 +116,19 @@ static void setGamma(float g) {
   for (int i = 0; i < 64; i++) lutG[i] = (uint8_t)lroundf(powf(i / 63.0f, g) * 63.0f);
 }
 
+// --------------------------- Ausrichtung ------------------------------
+// Das Panel kann nicht selbst drehen. Fuer "USB-Anschluss links / rechts"
+// wird das Bild beim Kopieren um 180° gedreht abgelegt (kostet praktisch
+// nichts) und der Touch passend umgerechnet. Wirkt sofort, ohne Neustart.
+// (gleiche Loesung wie im fronius-display)
+static bool rot180 = false;
+
+static inline uint16_t px(uint16_t raw) {
+  uint16_t v = __builtin_bswap16(raw);
+  if (!lutOn) return v;
+  return ((uint16_t)lutR[v >> 11] << 11) | ((uint16_t)lutG[(v >> 5) & 0x3F] << 5) | lutB[v & 0x1F];
+}
+
 // Bereich aus dem Zwischenbild (LovyanGFX speichert RGB565 byte-vertauscht)
 // in den Bildspeicher des Panels kopieren
 static void copyRect(const uint16_t* src, int x, int y, int w, int h) {
@@ -127,16 +140,22 @@ static void copyRect(const uint16_t* src, int x, int y, int w, int h) {
   if (w <= 0 || h <= 0) return;
   for (int row = y; row < y + h; row++) {
     const uint16_t* s = src + row * W + x;
-    uint16_t* d = fb + row * W + x;
-    if (!lutOn) {
-      for (int i = 0; i < w; i++) d[i] = __builtin_bswap16(s[i]);
+    if (!rot180) {
+      uint16_t* d = fb + row * W + x;
+      for (int i = 0; i < w; i++) d[i] = px(s[i]);
     } else {
-      for (int i = 0; i < w; i++) {
-        uint16_t v = __builtin_bswap16(s[i]);
-        d[i] = ((uint16_t)lutR[v >> 11] << 11) | ((uint16_t)lutG[(v >> 5) & 0x3F] << 5) | lutB[v & 0x1F];
-      }
+      // Zeile unten statt oben, Spalten rueckwaerts
+      uint16_t* d = fb + (H - 1 - row) * W + (W - 1 - x);
+      for (int i = 0; i < w; i++) *(d - i) = px(s[i]);
     }
   }
+}
+
+// Drehung umschalten; danach muss das ganze Bild neu ins Panel kopiert werden
+static void setRotate180(bool on) {
+  if (on == rot180) return;
+  rot180 = on;
+  if (fb) memset(fb, 0, W * H * 2);
 }
 
 // --------------------------- Hintergrundlicht -------------------------
@@ -214,9 +233,14 @@ static bool getTouch(int32_t* x, int32_t* y) {
       if (lastX >= W) lastX = W - 1;
       if (lastY >= H) lastY = H - 1;
 #ifdef TOUCH_ROTATE_180
-      lastX = W - 1 - lastX;   // manche Panels melden den Touch um 180° gedreht
-      lastY = H - 1 - lastY;
+      bool flip = !rot180;     // manche Panels melden den Touch ab Werk um 180° gedreht
+#else
+      bool flip = rot180;
 #endif
+      if (flip) {              // Ausrichtung "USB auf der anderen Seite"
+        lastX = W - 1 - lastX;
+        lastY = H - 1 - lastY;
+      }
       down = true;
     }
   }

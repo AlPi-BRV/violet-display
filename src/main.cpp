@@ -187,6 +187,7 @@ static bool     winterHeater = false;   // Winterbetrieb: Heizung gesperrt
 static bool     rotateVals   = false;   // Temperatur / Wasserwerte alle 5 s wechseln
 static bool     stepNames    = true;    // Rueckspuelung: Schritt 4 = Rueckspuelen, 5 = Nachspuelen
 static uint8_t  brightPct    = BRIGHT_DEFAULT_PCT;   // Helligkeit in Prozent
+static bool     rot180       = false;   // Ausrichtung: um 180° gedreht (USB-Anschluss auf der anderen Seite)
 static bool     sleepBlack   = false;   // Ruhezustand: false = abdimmen, true = schwarz
 static uint8_t  contrastLvl  = CONTRAST_DEFAULT;     // Kontraststufe (Gamma)
 static String   fwUpdatedFrom;   // gesetzt, wenn seit dem letzten Start aktualisiert wurde
@@ -226,6 +227,7 @@ static void loadSettings() {
   if (brightPct < 10 || brightPct > 100) brightPct = BRIGHT_DEFAULT_PCT;
   contrastLvl = prefs.getUChar("contrast", CONTRAST_DEFAULT);
   sleepBlack  = prefs.getBool("sleepblk", false);
+  rot180      = prefs.getBool("rot180", false);
   if (contrastLvl > 3) contrastLvl = CONTRAST_DEFAULT;
   prefs.end();
 
@@ -1813,8 +1815,8 @@ static Rect contrastBtn(int i) { return { 250 + i * 136, HEAD + 202, 128, 56 }; 
 static Rect brightBtn(int i)   { return { 250 + i * 108, HEAD + 270, 100, 56 }; }
 static Rect sleepBtn(int i)    { return { 250 + i * 274, HEAD + 360, 266, 56 }; }
 
-// Reiter Anzeige: Zeile 0 Werte-Wechsel, 1 Schrittnamen, 2 Winter Absorber, 3 Winter Heizung
-static Rect optBtn(int row, int col) { return { 250 + col * 150, HEAD + 22 + row * 92, 140, 60 }; }
+// Reiter Anzeige: Zeile 0 Ausrichtung, 1 Werte-Wechsel, 2 Schrittnamen, 3 Winter Absorber, 4 Winter Heizung
+static Rect optBtn(int row, int col) { return { 250 + col * 160, HEAD + 14 + row * 76, 150, 58 }; }
 
 // Tastatur (Violet/WLAN)
 static const char* const KB_ROWS[3][5][11] = {
@@ -2133,15 +2135,23 @@ static void drawSettingsBody() {
                                        "Winterbetrieb: Bedienung sperren", "Winterbetrieb: Bedienung sperren" };
     static const char* const B0[4] = { "Fest", "Ohne Namen", "Frei", "Frei" };
     static const char* const B1[4] = { "Alle 5 s", "Mit Namen", "Gesperrt", "Gesperrt" };
+    // Zeile 0: Ausrichtung – wirkt sofort und wird direkt gespeichert
+    useFont(fT);
+    text("Ausrichtung", M + 6, optBtn(0, 0).y + 15, C_TEXT, ML_DATUM);
+    useFont(fS);
+    text("USB-Anschluss links/rechts", M + 6, optBtn(0, 0).y + 43, C_DIM, ML_DATUM);
+    button(optBtn(0, 0), "Normal", !rot180);
+    button(optBtn(0, 1), "Gedreht 180°", rot180);
     bool val[4] = { edRotate, edNames, edWinSol, edWinHeat };
-    for (int row = 0; row < 4; row++) {
+    for (int i = 0; i < 4; i++) {
+      int row = i + 1;
       Rect b = optBtn(row, 0);
       useFont(fT);
-      text(T1[row], M + 6, b.y + 16, C_TEXT, ML_DATUM);
-      fitFont(T2[row], 240 - M, &fS);
-      text(T2[row], M + 6, b.y + 46, C_DIM, ML_DATUM);
-      button(optBtn(row, 0), B0[row], !val[row]);
-      button(optBtn(row, 1), B1[row], val[row]);
+      text(T1[i], M + 6, b.y + 15, C_TEXT, ML_DATUM);
+      fitFont(T2[i], 240 - M, &fS);
+      text(T2[i], M + 6, b.y + 43, C_DIM, ML_DATUM);
+      button(optBtn(row, 0), B0[i], !val[i]);
+      button(optBtn(row, 1), B1[i], val[i]);
     }
   } else {
     useFont(fT);
@@ -2192,6 +2202,16 @@ static bool validMask(const IPAddress& m) {
 }
 
 static bool connectWifi(uint32_t timeoutMs);
+
+// Ausrichtung umschalten: Bild und Touch drehen sofort mit, gespeichert wird direkt
+static void setRotation(bool on) {
+  if (on == rot180) return;
+  rot180 = on;
+  disp::setRotate180(on);
+  prefs.begin("pooldisp", false);
+  prefs.putBool("rot180", rot180);
+  prefs.end();
+}
 
 static void saveSettings() {
   for (int i = 0; i < NF; i++) if (!isPassField(i)) edVal[i].trim();
@@ -2382,10 +2402,12 @@ static void settingsTap(int x, int y) {
       }
     }
   } else if (edTab == 3) {
+    if (hit(optBtn(0, 0), x, y)) { setRotation(false); return; }
+    if (hit(optBtn(0, 1), x, y)) { setRotation(true); return; }
     bool* val[4] = { &edRotate, &edNames, &edWinSol, &edWinHeat };
-    for (int row = 0; row < 4; row++) {
-      if (hit(optBtn(row, 0), x, y)) { *val[row] = false; return; }
-      if (hit(optBtn(row, 1), x, y)) { *val[row] = true; return; }
+    for (int i = 0; i < 4; i++) {
+      if (hit(optBtn(i + 1, 0), x, y)) { *val[i] = false; return; }
+      if (hit(optBtn(i + 1, 1), x, y)) { *val[i] = true; return; }
     }
   } else {
     for (int i = 0; i < 5; i++) if (hit(pollBtn(i), x, y)) { edPoll = POLL_CHOICES[i]; return; }
@@ -2603,6 +2625,7 @@ void setup() {
   disp::backlightBegin();
   disp::setBrightness(0);
   disp::setGamma(CONTRAST_GAMMA[contrastLvl]);
+  disp::setRotate180(rot180);
   if (!disp::begin()) Serial.println("Display konnte nicht gestartet werden");
   disp::touchBegin();
   canvas.setPsram(true);
