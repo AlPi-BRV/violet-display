@@ -40,3 +40,8 @@
 #ifndef POLL_INTERVAL_MS
 #define POLL_INTERVAL_MS 60000
 #endif
+
+// Zeitzone fuer die Nachtschaltung (POSIX-Format), Standard Deutschland
+#ifndef TIMEZONE
+#define TIMEZONE "CET-1CEST,M3.5.0,M10.5.0/3"
+#endif

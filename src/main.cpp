@@ -25,7 +25,7 @@
 #include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.3.8"
+#define FW_VERSION  "0.3.9"
 
 // Board-Kennung: steckt in jedem Dateinamen des Releases. Die Update-Suche
 // nimmt NUR Dateien mit der eigenen Kennung, damit ein 5" nie die 7"-Firmware
@@ -189,6 +189,10 @@ static bool     stepNames    = true;    // Rueckspuelung: Schritt 4 = Rueckspuel
 static uint8_t  brightPct    = BRIGHT_DEFAULT_PCT;   // Helligkeit in Prozent
 static bool     rot180       = false;   // Ausrichtung: um 180° gedreht (USB-Anschluss auf der anderen Seite)
 static bool     sleepBlack   = false;   // Ruhezustand: false = abdimmen, true = schwarz
+static bool     nightOn      = false;   // Nachtschaltung
+static uint16_t nightFrom    = 22 * 60; // Beginn in Minuten nach Mitternacht
+static uint16_t nightTo      = 6 * 60;  // Ende
+static uint8_t  nightLvl     = 0;       // Index in NIGHT_LABEL (letzter Eintrag = aus)
 static uint8_t  contrastLvl  = CONTRAST_DEFAULT;     // Kontraststufe (Gamma)
 static String   fwUpdatedFrom;   // gesetzt, wenn seit dem letzten Start aktualisiert wurde
 
@@ -197,6 +201,9 @@ static const char* const POLL_LABEL[] = { "15 s", "30 s", "1 min", "2 min", "5 m
 static const uint8_t BRIGHT_CHOICES[] = { 10, 20, 40, 70, 100 };
 static const float   CONTRAST_GAMMA[] = { 1.0f, 1.35f, 1.7f, 2.1f };
 static const char* const CONTRAST_LABEL[] = { "Normal", "Mehr", "Stark", "Max" };
+static const uint8_t NIGHT_PCT[] = { 10, 20, 0 };          // 0 = Display aus
+static const char* const NIGHT_LABEL[] = { "10 %", "20 %", "Aus (schwarz)" };
+static const uint8_t NIGHT_WAKE_PCT = 20;   // Nacht "aus": nach Beruehrung kurz so hell
 
 // Prozent -> PWM-Wert (0..255); gedimmt nie heller als die eingestellte Helligkeit
 static uint8_t brightDuty(uint8_t pct) { return (uint8_t)((uint16_t)pct * 255 / 100); }
@@ -227,6 +234,13 @@ static void loadSettings() {
   if (brightPct < 10 || brightPct > 100) brightPct = BRIGHT_DEFAULT_PCT;
   contrastLvl = prefs.getUChar("contrast", CONTRAST_DEFAULT);
   sleepBlack  = prefs.getBool("sleepblk", false);
+  nightOn     = prefs.getBool("nighton", false);
+  nightFrom   = prefs.getUShort("nightfrom", nightFrom);
+  nightTo     = prefs.getUShort("nightto", nightTo);
+  nightLvl    = prefs.getUChar("nightlvl", 0);
+  if (nightFrom >= 1440) nightFrom = 22 * 60;
+  if (nightTo >= 1440) nightTo = 6 * 60;
+  if (nightLvl > 2) nightLvl = 0;
   rot180      = prefs.getBool("rot180", false);
   if (contrastLvl > 3) contrastLvl = CONTRAST_DEFAULT;
   prefs.end();
@@ -305,6 +319,7 @@ static int      swPage = 0;          // Seite der Bedienseite Licht & Relais
 static uint32_t lastRotate = 0;
 static uint32_t lastTouchMs = 0;
 static bool     dimmed = false;
+static int      appliedDuty = -1;    // zuletzt gesetzte Helligkeit (-1 = neu setzen)
 static bool     needRedraw = true;     // Bildschirm neu aufbauen
 static bool     needFull = true;       // Uebersicht: alles statt nur geaenderte Bereiche
 static int      sollStufe = 2;
@@ -1758,6 +1773,7 @@ static bool     edIpFixed = false;
 static uint32_t edPoll = 30000;
 static bool     edWinSol = false, edWinHeat = false, edRotate = false, edNames = true;
 static bool     picPage = false;   // Unterseite Helligkeit & Kontrast
+static bool     nightPage = false; // Unterseite Nachtschaltung
 enum KbLayer { KB_LOWER, KB_UPPER, KB_SYM };
 static KbLayer  kbLayer = KB_LOWER;
 
@@ -1807,13 +1823,24 @@ static Rect padKey(int i) { return { PAD_X + (i % 3) * (PAD_W + 8), PAD_Y + (i /
 static Rect pollBtn(int i) { return { 250 + i * 108, HEAD + 22, 100, 60 }; }
 static const Rect R_UPD     = { 250, HEAD + 112, 540, 60 };
 static const Rect R_FACT    = { 250, HEAD + 292, 300, 60 };
-static const Rect R_PIC     = { 250, HEAD + 202, 540, 60 };
+static const Rect R_PIC     = { 250, HEAD + 202, 265, 60 };
+static const Rect R_NIGHT   = { 525, HEAD + 202, 265, 60 };
 
 // Unterseite Helligkeit & Kontrast
 static const int PIC_RAMP_Y = HEAD + 10, PIC_RAMP_H = 26, PIC_RAMP_G = 6, PIC_STEP = 24, PIC_X0 = 16;
 static Rect contrastBtn(int i) { return { 250 + i * 136, HEAD + 202, 128, 56 }; }
 static Rect brightBtn(int i)   { return { 250 + i * 108, HEAD + 270, 100, 56 }; }
 static Rect sleepBtn(int i)    { return { 250 + i * 274, HEAD + 360, 266, 56 }; }
+
+// Unterseite Nachtschaltung
+static Rect nightOnBtn(int i)   { return { 250 + i * 190, HEAD + 20, 180, 60 }; }
+static Rect nightMinus(int row) { return { 250, HEAD + 100 + row * 80, 90, 60 }; }
+static Rect nightVal(int row)   { return { 350, HEAD + 100 + row * 80, 170, 60 }; }
+static Rect nightPlus(int row)  { return { 530, HEAD + 100 + row * 80, 90, 60 }; }
+static Rect nightLvlBtn(int i) {
+  static const int X[3] = { 250, 380, 510 }, W[3] = { 120, 120, 280 };
+  return { X[i], HEAD + 270, W[i], 60 };
+}
 
 // Reiter Anzeige: Zeile 0 Ausrichtung, 1 Werte-Wechsel, 2 Schrittnamen, 3 Winter Absorber, 4 Winter Heizung
 static Rect optBtn(int row, int col) { return { 250 + col * 160, HEAD + 14 + row * 76, 150, 58 }; }
@@ -1888,6 +1915,7 @@ static void openSettings(int tab) {
   edRotate = rotateVals;
   edNames = stepNames;
   picPage = false;
+  nightPage = false;
   edTab = tab;
   edField = tab == 0 ? 0 : (tab == 1 ? 3 : 5);
   edShowPass = false;
@@ -2052,7 +2080,7 @@ static void pictureTap(int x, int y) {
   for (int i = 0; i < 5; i++)
     if (hit(brightBtn(i), x, y)) {
       brightPct = BRIGHT_CHOICES[i];
-      disp::setBrightness(brightDuty(brightPct));
+      appliedDuty = -1;
       prefs.begin("pooldisp", false);
       prefs.putUChar("bright", brightPct);
       prefs.end();
@@ -2068,7 +2096,116 @@ static void pictureTap(int x, int y) {
     }
 }
 
+// ---------------------------------------------------------------
+// Nachtschaltung
+// ---------------------------------------------------------------
+// Uhrzeit in Minuten nach Mitternacht: per NTP, sonst die Uhrzeit, die die Violet
+// bei jeder Abfrage mitliefert (geht auch ohne Internet). -1 = unbekannt.
+static int nowMinutes() {
+  struct tm t;
+  if (getLocalTime(&t, 0) && t.tm_year > 120) return t.tm_hour * 60 + t.tm_min;
+  if (data.valid && failCount < 2) {
+    String u = data.uhrzeit;
+    if (u.length() == 5 && isDigit(u[0]) && isDigit(u[1]) && u[2] == ':' && isDigit(u[3]) && isDigit(u[4])) {
+      int h = u.substring(0, 2).toInt(), m = u.substring(3, 5).toInt();
+      if (h < 24 && m < 60) return h * 60 + m;
+    }
+  }
+  return -1;
+}
+static bool nightNow() {
+  if (!nightOn || nightFrom == nightTo) return false;
+  int m = nowMinutes();
+  if (m < 0) return false;                       // Uhrzeit noch unbekannt
+  return nightFrom < nightTo ? (m >= nightFrom && m < nightTo) : (m >= nightFrom || m < nightTo);
+}
+// Helligkeit fuer jetzt: Tag/Nacht, wach/Ruhezustand. Bei einer Stoerung leuchtet
+// das Display auch im Ruhezustand gedimmt, damit man das Symbol sieht.
+static int wantedDuty() {
+  bool err = netError() != NE_NONE;
+  if (!nightNow()) {
+    if (!dimmed) return brightDuty(brightPct);
+    return (!sleepBlack || err) ? dimDuty() : 0;
+  }
+  uint8_t np = NIGHT_PCT[nightLvl];
+  if (np == 0) {                                 // nachts aus – nach Beruehrung kurz an
+    if (!dimmed) return brightDuty(min(brightPct, NIGHT_WAKE_PCT));
+    return err ? brightDuty(10) : 0;
+  }
+  int d = brightDuty(min(brightPct, np));
+  if (!dimmed) return d;
+  return (!sleepBlack || err) ? min(d, (int)BRIGHT_DIM) : 0;
+}
+static String hhmm(int m) {
+  char b[8];
+  snprintf(b, sizeof(b), "%02d:%02d", m / 60, m % 60);
+  return String(b);
+}
+
+static void drawNight() {
+  useFont(fT);
+  text("Nachtschaltung", M + 6, HEAD / 2, C_TEXT, ML_DATUM);
+  button(R_SAVE, "Fertig", false, C_BTN, C_ACC_GRN, true);
+  useFont(fT);
+  text("Nachtschaltung", M + 6, nightOnBtn(0).y + 30, C_TEXT, ML_DATUM);
+  button(nightOnBtn(0), "Aus", !nightOn);
+  button(nightOnBtn(1), "Ein", nightOn);
+  static const char* const ROW[2] = { "Von", "Bis" };
+  for (int r = 0; r < 2; r++) {
+    uint16_t col = nightOn ? C_TEXT : C_DIM;
+    useFont(fT);
+    text(ROW[r], M + 6, nightVal(r).y + 30, col, ML_DATUM);
+    button(nightMinus(r), "-", false);
+    button(nightPlus(r), "+", false);
+    Rect v = nightVal(r);
+    canvas.drawRoundRect(v.x, v.y, v.w, v.h, 12, C_BTN);
+    String t = hhmm(r == 0 ? nightFrom : nightTo) + " Uhr";
+    fitFont(t, v.w - 16, &fB, &fT);
+    text(t, v.x + v.w / 2, v.y + v.h / 2, col, MC_DATUM);
+  }
+  useFont(fT);
+  text("Helligkeit", M + 6, nightLvlBtn(0).y + 16, nightOn ? C_TEXT : C_DIM, ML_DATUM);
+  useFont(fS);
+  text("nachts höchstens", M + 6, nightLvlBtn(0).y + 42, C_DIM, ML_DATUM);
+  for (int i = 0; i < 3; i++) button(nightLvlBtn(i), NIGHT_LABEL[i], nightLvl == i);
+  useFont(fS);
+  int y = nightLvlBtn(0).y + 90;
+  text("Gilt auch nach Berührung; der Ruhezustand nach 5 min bleibt.", M + 6, y, C_DIM, ML_DATUM);
+  text("Bei \"Aus\" leuchtet das Display nach Berührung mit " + String(NIGHT_WAKE_PCT) + " % auf.", M + 6, y + 24,
+       C_DIM, ML_DATUM);
+  int m = nowMinutes();
+  String st = m < 0 ? String("Uhrzeit noch unbekannt") : "Jetzt " + hhmm(m) + " Uhr – " + (nightNow() ? "Nacht" : "Tag");
+  text(st, M + 6, 480 - M - 4, nightNow() ? C_ACC_GRN : C_DIM, BL_DATUM);
+}
+
+static void nightSave() {
+  prefs.begin("pooldisp", false);
+  prefs.putBool("nighton", nightOn);
+  prefs.putUShort("nightfrom", nightFrom);
+  prefs.putUShort("nightto", nightTo);
+  prefs.putUChar("nightlvl", nightLvl);
+  prefs.end();
+  appliedDuty = -1;
+}
+
+static void nightTap(int x, int y) {
+  if (hit(R_SAVE, x, y)) { nightPage = false; return; }
+  for (int i = 0; i < 2; i++)
+    if (hit(nightOnBtn(i), x, y)) { nightOn = i == 1; nightSave(); return; }
+  for (int r = 0; r < 2; r++) {
+    uint16_t& v = r == 0 ? nightFrom : nightTo;
+    if (hit(nightMinus(r), x, y)) { v = (v + 1440 - 30) % 1440; v -= v % 30; nightSave(); return; }
+    if (hit(nightPlus(r), x, y))  { v = (v - v % 30 + 30) % 1440; nightSave(); return; }
+  }
+  for (int i = 0; i < 3; i++)
+    if (hit(nightLvlBtn(i), x, y)) { nightLvl = i; nightSave(); return; }
+}
+
 static void drawSettingsBody() {
+  if (nightPage) {
+    drawNight();
+    return;
+  }
   if (picPage) {
     drawPicture();
     return;
@@ -2170,7 +2307,9 @@ static void drawSettingsBody() {
 
     useFont(fT);
     text("Bild", M + 6, R_PIC.y + 30, C_TEXT, ML_DATUM);
-    button(R_PIC, "Helligkeit & Kontrast ...", false);
+    button(R_PIC, "Helligkeit & Kontrast ...", false, C_BTN, C_TEXT, true);
+    button(R_NIGHT, nightOn ? "Nacht " + hhmm(nightFrom) + "–" + hhmm(nightTo) + " ..." : String("Nachtschaltung ..."),
+           false, C_BTN, C_TEXT, true);
 
     useFont(fT);
     text("Zurücksetzen", M + 6, R_FACT.y + 30, C_TEXT, ML_DATUM);
@@ -2326,6 +2465,10 @@ static void settingsTap(int x, int y) {
     pictureTap(x, y);
     return;
   }
+  if (nightPage) {
+    nightTap(x, y);
+    return;
+  }
   if (wifiList) {
     if (hit(R_SAVE, x, y)) { wifiList = false; return; }
     for (int i = 0; i < scanN; i++) {
@@ -2412,6 +2555,7 @@ static void settingsTap(int x, int y) {
   } else {
     for (int i = 0; i < 5; i++) if (hit(pollBtn(i), x, y)) { edPoll = POLL_CHOICES[i]; return; }
     if (hit(R_PIC, x, y)) { picPage = true; return; }
+    if (hit(R_NIGHT, x, y)) { nightPage = true; return; }
     if (hit(R_UPD, x, y)) {
       if (updateVersion.length()) {
         askConfirm(A_OTA, "Update " + updateVersion + " installieren?", "Das Display startet danach neu.");
@@ -2571,7 +2715,7 @@ static void handleTouch() {
     lastTouchMs = millis();
     if (dimmed) {
       dimmed = false;
-      disp::setBrightness(brightDuty(brightPct));
+      appliedDuty = -1;
     } else if (screen == SCR_OVERVIEW && confirmAct == A_NONE) {
       pendingTap = true;
     } else {
@@ -2645,6 +2789,13 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   connectWifi(20000);
+
+  // Uhrzeit fuer die Nachtschaltung: zuerst der Router (viele beantworten NTP), dann Internet.
+  // Ohne NTP gilt die Uhrzeit, die die Violet mitliefert.
+  static char ntpGw[16];
+  strlcpy(ntpGw, WiFi.status() == WL_CONNECTED ? WiFi.gatewayIP().toString().c_str() : "pool.ntp.org",
+          sizeof(ntpGw));
+  configTzTime(TIMEZONE, ntpGw, "pool.ntp.org", "time.google.com");
 
   lastTouchMs = millis();
   if (wifiSsid.length() == 0) {      // noch nie eingerichtet
@@ -2766,11 +2917,10 @@ void loop() {
   // Bei "Schwarz" leuchtet das Display gedimmt auf, solange eine Stoerung besteht –
   // so sieht man das durchgestrichene Symbol auch im Ruhezustand.
   if (!dimmed && millis() - lastTouchMs > DIM_AFTER_MS) dimmed = true;
-  static int lastDuty = -1;
-  int duty = !dimmed ? brightDuty(brightPct)
-                     : (!sleepBlack || netError() != NE_NONE) ? dimDuty() : 0;
-  if (duty != lastDuty) {
-    lastDuty = duty;
+  // Nachtschaltung begrenzt die Helligkeit im eingestellten Zeitfenster.
+  int duty = wantedDuty();
+  if (duty != appliedDuty) {
+    appliedDuty = duty;
     disp::setBrightness((uint8_t)duty);
   }
 
