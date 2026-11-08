@@ -2101,7 +2101,7 @@ static void pictureTap(int x, int y) {
 // ---------------------------------------------------------------
 // Uhrzeit in Minuten nach Mitternacht: per NTP, sonst die Uhrzeit, die die Violet
 // bei jeder Abfrage mitliefert (geht auch ohne Internet). -1 = unbekannt.
-static int nowMinutes() {
+static int clockMinutes() {
   // Nicht getLocalTime(&t, 0): Das prueft nur, solange millis() noch auf demselben Wert steht.
   // Ist der Prozessor gerade beschaeftigt (Datenabruf), meldet es ab und zu "keine Uhrzeit" –
   // dann galt kurz Tag und das Display blitzte hell auf. time() liest die Uhr direkt.
@@ -2117,6 +2117,21 @@ static int nowMinutes() {
     }
   }
   return -1;
+}
+// Fehlt die Uhrzeit kurz (z. B. Violet-Daten werden gerade ersetzt), die zuletzt bekannte
+// bis zu 15 min weiterzaehlen – sonst gaelte fuer einen Augenblick "Tag".
+static int nowMinutes() {
+  static int lastM = -1;
+  static uint32_t lastMs = 0;
+  int m = clockMinutes();
+  if (m >= 0) {
+    lastM = m;
+    lastMs = millis();
+    return m;
+  }
+  uint32_t age = millis() - lastMs;
+  if (lastM < 0 || age > 15UL * 60UL * 1000UL) return -1;
+  return (lastM + (int)(age / 60000UL)) % 1440;
 }
 static bool nightNow() {
   if (!nightOn || nightFrom == nightTo) return false;
