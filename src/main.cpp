@@ -2102,8 +2102,13 @@ static void pictureTap(int x, int y) {
 // Uhrzeit in Minuten nach Mitternacht: per NTP, sonst die Uhrzeit, die die Violet
 // bei jeder Abfrage mitliefert (geht auch ohne Internet). -1 = unbekannt.
 static int nowMinutes() {
+  // Nicht getLocalTime(&t, 0): Das prueft nur, solange millis() noch auf demselben Wert steht.
+  // Ist der Prozessor gerade beschaeftigt (Datenabruf), meldet es ab und zu "keine Uhrzeit" –
+  // dann galt kurz Tag und das Display blitzte hell auf. time() liest die Uhr direkt.
+  time_t now = time(nullptr);
   struct tm t;
-  if (getLocalTime(&t, 0) && t.tm_year > 120) return t.tm_hour * 60 + t.tm_min;
+  localtime_r(&now, &t);
+  if (t.tm_year > 120) return t.tm_hour * 60 + t.tm_min;
   if (data.valid && failCount < 2) {
     String u = data.uhrzeit;
     if (u.length() == 5 && isDigit(u[0]) && isDigit(u[1]) && u[2] == ':' && isDigit(u[3]) && isDigit(u[4])) {
