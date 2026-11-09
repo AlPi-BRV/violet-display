@@ -25,7 +25,7 @@
 #include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.3.9"
+#define FW_VERSION  "0.3.10"
 
 // Board-Kennung: steckt in jedem Dateinamen des Releases. Die Update-Suche
 // nimmt NUR Dateien mit der eigenen Kennung, damit ein 5" nie die 7"-Firmware
@@ -911,22 +911,82 @@ static bool fetchLatest(JsonDocument& doc) {
   return true;
 }
 
+// Kurze Anfrage an github.com ohne Weiterleitung; liefert den HTTP-Code und ggf. "Location".
+static int ghRequest(const char* method, const String& url, String* location, const String& info) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setHandshakeTimeout(20);
+  HTTPClient http;
+  http.setTimeout(15000);
+  http.setConnectTimeout(10000);
+  http.useHTTP10(true);
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  if (!http.begin(client, url)) {
+    updateErr = "Verbindung nicht möglich" + info;
+    return HTTPC_ERROR_CONNECTION_REFUSED;
+  }
+  http.setUserAgent("violet-display/" FW_VERSION);
+  const char* keys[] = { "Location" };
+  http.collectHeaders(keys, 1);
+  int code = http.sendRequest(method);
+  if (location) *location = http.header("Location");
+  http.end();
+  Serial.printf("Update-Pruefung: %s %s -> %d\n", method, url.c_str(), code);
+  if (code < 0) updateErr = (code == HTTPC_ERROR_READ_TIMEOUT ? String("Zeitüberschreitung") : HTTPClient::errorToString(code)) + info;
+  return code;
+}
+
+// Neueste Version ueber die Weiterleitung von github.com/<repo>/releases/latest
+// (-> .../releases/tag/vX.Y.Z). Kurze Antwort ohne JSON und ohne die API-Grenze von 60 Abfragen/h.
+// true = Abfrage hat geklappt; tag ohne "v", url leer, wenn die Update-Datei (noch) fehlt.
+static bool latestByRedirect(String& tag, String& url) {
+  size_t blk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  String info = " (WLAN " + String(WiFi.RSSI()) + " dBm, RAM " + String((unsigned)(blk / 1024)) + " kB)";
+  String loc;
+  int code = ghRequest("HEAD", "https://github.com/" GITHUB_REPO "/releases/latest", &loc, info);
+  int p = loc.lastIndexOf("/tag/");
+  if ((code != 301 && code != 302) || p < 0) {
+    if (code >= 0) updateErr = "GitHub antwortet HTTP " + String(code) + info;
+    return false;
+  }
+  String t = loc.substring(p + 5);
+  t.trim();
+  tag = t;
+  if (tag.startsWith("v") || tag.startsWith("V")) tag.remove(0, 1);
+  url = "";
+  if (versionNum(tag) <= versionNum(FW_VERSION)) return true;     // nichts Neues – Datei egal
+  String file = "https://github.com/" GITHUB_REPO "/releases/download/" + t + "/" OTA_PREFIX + tag + OTA_SUFFIX;
+  int c2 = ghRequest("HEAD", file, nullptr, info);
+  if (c2 == 301 || c2 == 302 || c2 == 200) url = file;
+  else if (c2 == 404) Serial.println("Update-Pruefung: Update-Datei fehlt noch (Release im Bau?)");
+  else return false;
+  return true;
+}
+
 static bool checkForUpdate() {
   if (WiFi.status() != WL_CONNECTED) { updateErr = "kein WLAN"; return false; }
-  JsonDocument doc;
-  if (!fetchLatest(doc)) {
-    delay(1500);                       // ein zweiter Versuch, z. B. bei schwachem WLAN
-    doc.clear();
-    if (!fetchLatest(doc)) return false;
+  String tag, url;
+  if (!latestByRedirect(tag, url)) {
+    // Ersatzweg: GitHub-API (laengere JSON-Antwort)
+    String errRedirect = updateErr;
+    JsonDocument doc;
+    if (!fetchLatest(doc)) {
+      delay(1500);                       // ein zweiter Versuch, z. B. bei schwachem WLAN
+      doc.clear();
+      if (!fetchLatest(doc)) {
+        if (errRedirect.length()) updateErr = errRedirect;
+        return false;
+      }
+    }
+    tag = doc["tag_name"] | "";
+    if (tag.startsWith("v") || tag.startsWith("V")) tag.remove(0, 1);
+    url = "";
+    for (JsonObject a : doc["assets"].as<JsonArray>()) {
+      String name = a["name"] | "";
+      if (name.startsWith(OTA_PREFIX) && name.endsWith(OTA_SUFFIX)) url = a["browser_download_url"] | "";
+    }
   }
   updateErr = "";
-  String tag = doc["tag_name"] | "";
-  if (tag.startsWith("v") || tag.startsWith("V")) tag.remove(0, 1);
-  String url;
-  for (JsonObject a : doc["assets"].as<JsonArray>()) {
-    String name = a["name"] | "";
-    if (name.startsWith(OTA_PREFIX) && name.endsWith(OTA_SUFFIX)) url = a["browser_download_url"] | "";
-  }
   Serial.printf("Update-Pruefung: installiert %s, aktuell %s\n", FW_VERSION, tag.c_str());
   String neu = (tag.length() && versionNum(tag) > versionNum(FW_VERSION)) ? tag : "";
   if (neu != updateVersion || url != updateUrl) {
