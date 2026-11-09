@@ -25,7 +25,7 @@
 #include "display_rgb.h"
 #include "fonts.h"
 
-#define FW_VERSION  "0.3.10"
+#define FW_VERSION  "0.3.11"
 
 // Board-Kennung: steckt in jedem Dateinamen des Releases. Die Update-Suche
 // nimmt NUR Dateien mit der eigenen Kennung, damit ein 5" nie die 7"-Firmware
@@ -1895,8 +1895,8 @@ static Rect sleepBtn(int i)    { return { 250 + i * 274, HEAD + 360, 266, 56 }; 
 // Unterseite Nachtschaltung
 static Rect nightOnBtn(int i)   { return { 250 + i * 190, HEAD + 20, 180, 60 }; }
 static Rect nightMinus(int row) { return { 250, HEAD + 100 + row * 80, 90, 60 }; }
-static Rect nightVal(int row)   { return { 350, HEAD + 100 + row * 80, 170, 60 }; }
-static Rect nightPlus(int row)  { return { 530, HEAD + 100 + row * 80, 90, 60 }; }
+static Rect nightVal(int row)   { return { 350, HEAD + 100 + row * 80, 230, 60 }; }
+static Rect nightPlus(int row)  { return { 590, HEAD + 100 + row * 80, 90, 60 }; }
 static Rect nightLvlBtn(int i) {
   static const int X[3] = { 250, 380, 510 }, W[3] = { 120, 120, 280 };
   return { X[i], HEAD + 270, W[i], 60 };
@@ -2240,7 +2240,8 @@ static void drawNight() {
     Rect v = nightVal(r);
     canvas.drawRoundRect(v.x, v.y, v.w, v.h, 12, C_BTN);
     String t = hhmm(r == 0 ? nightFrom : nightTo) + " Uhr";
-    fitFont(t, v.w - 16, &fB, &fT);
+    // Schrift nach der breitesten moeglichen Zeit waehlen, damit Von und Bis immer gleich gross sind
+    fitFont(String("00:00 Uhr"), v.w - 16, &fB, &fT);
     text(t, v.x + v.w / 2, v.y + v.h / 2, col, MC_DATUM);
   }
   useFont(fT);
